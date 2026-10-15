@@ -1,0 +1,15 @@
+# Home Assistant para o FlowMonitor
+# Subir:   docker compose up -d      (nesta pasta)
+# Abrir:   http://localhost:8123
+# Parar:   docker compose down
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+    volumes:
+      - ./config:/config
+    environment:
+      - TZ=America/Sao_Paulo

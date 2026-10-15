@@ -1,0 +1,14 @@
+{
+  "name": "flowmonitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Painel NOC em tempo real: simulador e versão ao vivo para roteadores Huawei via Home Assistant.",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.0"
+  },
+  "license": "MIT"
+}
