@@ -190,9 +190,40 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
 .fm-scroll{scrollbar-width:thin;scrollbar-color:rgb(var(--line-2)) transparent}
 .fm-btn:focus-visible{outline:2px solid rgb(var(--electric));outline-offset:2px}
 
+/* Atualiza\xE7\xE3o manual */
+.fm-spin{animation:fm-spin .8s cubic-bezier(.4,0,.2,1)}
+@keyframes fm-spin{to{transform:rotate(360deg)}}
+.fm-sync-ring{position:absolute;inset:-1px;border-radius:12px;pointer-events:none;border:1px solid rgb(var(--electric));
+  box-shadow:0 0 26px -2px rgb(var(--electric) / .5), inset 0 0 18px -6px rgb(var(--electric) / .35);animation:fm-sync 1.1s ease-out forwards}
+@keyframes fm-sync{0%{opacity:1}100%{opacity:0}}
+
+/* Terminal de diagn\xF3stico */
+.fm-term{background:#000;border:1px solid rgb(var(--neon) / .22);border-radius:10px;
+  box-shadow:inset 0 0 40px rgb(var(--neon) / .05), 0 0 24px -12px rgb(var(--neon) / .45)}
+.fm-term-out{color:rgb(var(--neon));text-shadow:0 0 6px rgb(var(--neon) / .35)}
+.fm-term-input{background:#000;color:rgb(var(--neon));caret-color:rgb(var(--neon));border:1px solid rgb(var(--neon) / .3)}
+.fm-term-input::placeholder{color:rgb(var(--neon) / .35)}
+.fm-term-input:focus{outline:none;border-color:rgb(var(--neon) / .8);box-shadow:0 0 0 3px rgb(var(--neon) / .15)}
+.fm-term-btn{background:#000;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;border:1px solid currentColor;transition:background .15s, box-shadow .15s}
+.fm-term-btn:hover:not(:disabled){background:rgb(var(--neon) / .08);box-shadow:0 0 16px -4px currentColor}
+.fm-term-btn:disabled{opacity:.35;cursor:not-allowed}
+.fm-cursor{display:inline-block;width:.6em;height:1.05em;vertical-align:-2px;background:rgb(var(--neon));animation:fm-blink 1s steps(2, jump-none) infinite}
+
+/* Navega\xE7\xE3o inferior (celular / APK) */
+.fm-anchor{scroll-margin-top:112px}
+.fm-bottomnav{position:fixed;z-index:50;left:0;right:0;bottom:0;
+  padding-bottom:env(safe-area-inset-bottom, 0px);
+  padding-left:max(8px, env(safe-area-inset-left, 0px));padding-right:max(8px, env(safe-area-inset-right, 0px));
+  background:rgb(var(--bg) / .92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-top:1px solid rgb(var(--line))}
+@media (max-width:767px){
+  .fm-main{padding-bottom:calc(88px + env(safe-area-inset-bottom, 0px))!important}
+  .fm-toasts{bottom:calc(80px + env(safe-area-inset-bottom, 0px))}
+}
+
 @media (prefers-reduced-motion: reduce){
   .fm-orb::before,.fm-orb::after,.fm-live.is-on::after,.fm-led.up.act,.fm-blink,.fm-led.fail,
-  .fm-row-in,.fm-row-out,.fm-bump,.fm-toast{animation:none!important}
+  .fm-row-in,.fm-row-out,.fm-bump,.fm-toast,.fm-spin,.fm-sync-ring,.fm-cursor{animation:none!important}
+  .fm-sync-ring{opacity:0}
   .fm-bar{transition:none}
 }
 `;
@@ -469,10 +500,10 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
       this.cpuHist = [...this.cpuHist, { i: this.phase, v: this.cpu }].slice(-HISTORY);
       if (advanceUptime) this.uptimeSec += 1;
     }
-    stepWanHealth() {
+    stepWanHealth(countDowntime = true) {
       var _a;
       if (this.wanDown) {
-        this.sessionDown += 1;
+        if (countDowntime) this.sessionDown += 1;
         this.loss = 100;
         this.latency = null;
         return;
@@ -510,6 +541,24 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
       }
       return events;
     }
+    /** Atualização manual: nova leitura de tráfego, CPU e ping + releitura da tabela de leases. */
+    refresh() {
+      this.stepTraffic(Date.now());
+      this.stepHardware(false);
+      this.stepWanHealth(false);
+      const purged = this.devices.filter((d) => d.status === "expired").length;
+      this.devices = this.devices.filter((d) => d.status !== "expired");
+      const bound = this.devices.length;
+      const expiring = this.devices.filter((d) => leaseState(d) === "expiring").length;
+      this.refreshedAt = Date.now();
+      this.addLog("system", "info", `manual refresh by noc: monitor-traffic, resource, netwatch ok (${this.wanDown ? "wan down" : `rtt ${this.latency.toFixed(1)}ms`})`);
+      this.addLog("dhcp", "info", `dhcp-lan lease table reloaded: ${bound} bound, ${expiring} expiring${purged ? `, ${purged} purged` : ""}`);
+      return { bound, expiring, purged };
+    }
+    /** Estado de um IP da LAN, usado pelo terminal de diagnóstico. */
+    lookupLan(ip) {
+      return this.devices.find((d) => d.ip === ip && d.status !== "expired") || null;
+    }
     snapshot() {
       const down = this.baseDown + this.sessionDown;
       return {
@@ -532,7 +581,8 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
         uptimePct: (DAY - down) / DAY * 100,
         devices: this.devices,
         log: this.log,
-        nextJoin: this.nextJoin
+        nextJoin: this.nextJoin,
+        refreshedAt: this.refreshedAt || null
       };
     }
   };
@@ -575,30 +625,64 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
     }, []);
     return /* @__PURE__ */ import_react.default.createElement("div", { className: "hidden items-center gap-2 rounded-md border border-line bg-inset/70 px-3 py-1.5 sm:flex" }, /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Clock, { size: 14, className: "text-muted" }), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono text-[13px] tabular-nums text-ink" }, fmtClock(now)), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono text-[10px] text-muted" }, "BRT"));
   }
-  function Header({ running, onToggle, wanDown }) {
-    return /* @__PURE__ */ import_react.default.createElement("header", { className: "fm-header sticky z-40 border-b border-line bg-bg/80 backdrop-blur-md" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-gutter mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 py-3" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "grid h-10 w-10 place-items-center rounded-lg border border-electric/40 bg-electric/10 text-electric shadow-[0_0_22px_-4px_rgb(var(--electric)/.6)]" }, /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Activity, { size: 22, strokeWidth: 2.2 })), /* @__PURE__ */ import_react.default.createElement("div", { className: "leading-tight" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "font-display text-[22px] font-bold tracking-tight text-ink" }, "Flow", /* @__PURE__ */ import_react.default.createElement("span", { className: "text-electric" }, "Monitor")), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ import_react.default.createElement(
+  function useOnline() {
+    const [online, setOnline] = (0, import_react.useState)(() => typeof navigator === "undefined" ? true : navigator.onLine !== false);
+    (0, import_react.useEffect)(() => {
+      const up = () => setOnline(true);
+      const down = () => setOnline(false);
+      window.addEventListener("online", up);
+      window.addEventListener("offline", down);
+      return () => {
+        window.removeEventListener("online", up);
+        window.removeEventListener("offline", down);
+      };
+    }, []);
+    return online;
+  }
+  function ConnectionStrip({ online, running, wanDown, lastSync }) {
+    const s = !online ? { state: "var(--crit)", label: "Offline", text: "sem conex\xE3o com o servidor", tone: "text-crit" } : !running ? { state: "var(--warn)", label: "Pausado", text: "atualiza\xE7\xE3o autom\xE1tica suspensa", tone: "text-warn" } : { state: "var(--neon)", label: "Online", text: "Conectado ao servidor", tone: "text-neon" };
+    return /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-gutter flex items-center justify-between gap-3 border-t border-line/70 py-1.5 md:hidden", role: "status", "aria-live": "polite" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "flex min-w-0 items-center gap-2 text-[11px]" }, /* @__PURE__ */ import_react.default.createElement("span", { className: cx("fm-live flex-none", online && running && "is-on"), style: { "--state": s.state } }), /* @__PURE__ */ import_react.default.createElement("span", { className: cx("font-semibold", s.tone) }, s.label), /* @__PURE__ */ import_react.default.createElement("span", { className: "truncate text-ink-2" }, "\xB7 ", s.text), wanDown && /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono flex-none rounded border border-crit/40 px-1 text-[9px] text-crit" }, "WAN DOWN")), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono flex-none text-[10px] tabular-nums text-muted" }, "sync ", fmtClock(lastSync)));
+  }
+  function Header({ running, onToggle, wanDown, onRefresh, refreshing, refreshCount, online, lastSync }) {
+    return /* @__PURE__ */ import_react.default.createElement("header", { className: "fm-header sticky z-40 border-b border-line bg-bg/80 backdrop-blur-md" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-gutter mx-auto flex max-w-[1600px] items-center justify-between gap-3 py-3" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "flex min-w-0 items-center gap-3" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "grid h-10 w-10 flex-none place-items-center rounded-lg border border-electric/40 bg-electric/10 text-electric shadow-[0_0_22px_-4px_rgb(var(--electric)/.6)]" }, /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Activity, { size: 22, strokeWidth: 2.2 })), /* @__PURE__ */ import_react.default.createElement("div", { className: "min-w-0 leading-tight" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "font-display text-[20px] font-bold tracking-tight text-ink sm:text-[22px]" }, "Flow", /* @__PURE__ */ import_react.default.createElement("span", { className: "text-electric" }, "Monitor")), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ import_react.default.createElement(
       "span",
       {
         className: cx("fm-live", running && "is-on"),
         style: { "--state": running ? wanDown ? "var(--crit)" : "var(--neon)" : "var(--warn)" }
       }
-    ), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-label text-[11px] text-ink-2" }, "NOC Real-Time"), !running && /* @__PURE__ */ import_react.default.createElement(StatePill, { tone: "warn", icon: import_lucide_react.Pause }, "Pausado")))), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex flex-wrap items-center gap-2.5" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "hidden items-center gap-2 rounded-md border border-line bg-inset/70 px-3 py-1.5 md:flex" }, /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Router, { size: 14, className: "text-muted" }), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono text-[12px] text-ink-2" }, "FM-EDGE-01"), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono text-[11px] text-muted" }, "10.10.10.1")), /* @__PURE__ */ import_react.default.createElement(LiveClock, null), /* @__PURE__ */ import_react.default.createElement(
+    ), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-label whitespace-nowrap text-[11px] text-ink-2" }, "NOC Real-Time"), !running && /* @__PURE__ */ import_react.default.createElement("span", { className: "hidden sm:inline" }, /* @__PURE__ */ import_react.default.createElement(StatePill, { tone: "warn", icon: import_lucide_react.Pause }, "Pausado")))), /* @__PURE__ */ import_react.default.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: onRefresh,
+        disabled: refreshing,
+        "aria-label": "Atualizar agora: ping, tr\xE1fego, CPU e leases DHCP",
+        title: "Atualizar agora (ping, tr\xE1fego, CPU e leases DHCP)",
+        className: "fm-btn ml-1 inline-flex h-10 min-w-10 flex-none items-center justify-center gap-2 rounded-md border border-line-2 bg-inset/70 px-2.5 text-[13px] font-semibold text-ink-2 transition hover:border-electric/60 hover:text-electric disabled:cursor-progress sm:px-3.5"
+      },
+      /* @__PURE__ */ import_react.default.createElement(import_lucide_react.RefreshCw, { key: refreshCount, size: 16, className: cx(refreshing && "fm-spin text-electric") }),
+      /* @__PURE__ */ import_react.default.createElement("span", { className: "hidden sm:inline" }, refreshing ? "Atualizando\u2026" : "Atualizar")
+    )), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex flex-none items-center gap-2.5" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "hidden items-center gap-2 rounded-md border border-line bg-inset/70 px-3 py-1.5 lg:flex" }, /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Router, { size: 14, className: "text-muted" }), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono text-[12px] text-ink-2" }, "FM-EDGE-01"), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono text-[11px] text-muted" }, "10.10.10.1")), /* @__PURE__ */ import_react.default.createElement(LiveClock, null), /* @__PURE__ */ import_react.default.createElement(
       "button",
       {
         type: "button",
         onClick: onToggle,
         "aria-pressed": !running,
+        "aria-label": running ? "Pausar Simula\xE7\xE3o" : "Retomar Simula\xE7\xE3o",
         className: cx(
-          "fm-btn inline-flex items-center gap-2 rounded-md border px-3.5 py-2 text-[13px] font-semibold transition",
+          "fm-btn inline-flex h-10 min-w-10 items-center justify-center gap-2 rounded-md border px-2.5 text-[13px] font-semibold transition sm:px-3.5",
           running ? "border-electric/50 bg-electric/10 text-electric hover:bg-electric/20 hover:shadow-[0_0_18px_-4px_rgb(var(--electric)/.7)]" : "border-neon/50 bg-neon/10 text-neon hover:bg-neon/20 hover:shadow-[0_0_18px_-4px_rgb(var(--neon)/.7)]"
         )
       },
-      running ? /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Pause, { size: 15 }) : /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Play, { size: 15 }),
-      running ? "Pausar Simula\xE7\xE3o" : "Retomar Simula\xE7\xE3o"
-    ))));
+      running ? /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Pause, { size: 16 }) : /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Play, { size: 16 }),
+      /* @__PURE__ */ import_react.default.createElement("span", { className: "hidden sm:inline" }, running ? "Pausar Simula\xE7\xE3o" : "Retomar Simula\xE7\xE3o")
+    ))), /* @__PURE__ */ import_react.default.createElement(ConnectionStrip, { online, running, wanDown, lastSync }));
+  }
+  function SyncRing({ k }) {
+    return k > 0 ? /* @__PURE__ */ import_react.default.createElement("span", { key: k, "aria-hidden": "true", className: "fm-sync-ring" }) : null;
   }
   var AVAIL_HISTORY = Array.from({ length: 47 }, (_, i) => i === 29 ? "down" : i === 12 ? "degraded" : "up");
-  function StatusCard({ snap, running, onToggleFailure, activeCount }) {
+  function StatusCard({ snap, running, onToggleFailure, activeCount, sync }) {
     const down = snap.wanDown;
     const state = down ? "var(--crit)" : "var(--neon)";
     const current = down ? "down" : snap.sessionDown > 0 ? "degraded" : "up";
@@ -615,7 +699,7 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
       { label: "Perda", sub: "pacotes", value: `${nf(snap.loss, 1)}%`, bad: snap.loss > 1 },
       { label: "Ativos", sub: "leases DHCP", value: String(activeCount), bad: false }
     ];
-    return /* @__PURE__ */ import_react.default.createElement("section", { className: "fm-card flex flex-col gap-5 p-5 lg:col-span-4", "aria-labelledby": "status-title" }, /* @__PURE__ */ import_react.default.createElement(
+    return /* @__PURE__ */ import_react.default.createElement("section", { id: "status", className: "fm-card fm-anchor flex flex-col gap-5 p-5 lg:col-span-4", "aria-labelledby": "status-title" }, /* @__PURE__ */ import_react.default.createElement(SyncRing, { k: sync }), /* @__PURE__ */ import_react.default.createElement(
       CardHeader,
       {
         icon: import_lucide_react.Network,
@@ -726,9 +810,9 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
       }
     )))));
   }
-  function TrafficCard({ snap }) {
+  function TrafficCard({ snap, sync }) {
     const total = snap.tr.wanIn + snap.tr.wanOut;
-    return /* @__PURE__ */ import_react.default.createElement("section", { className: "fm-card flex min-w-0 flex-col gap-4 p-5 lg:col-span-8", "aria-labelledby": "traffic-title" }, /* @__PURE__ */ import_react.default.createElement(
+    return /* @__PURE__ */ import_react.default.createElement("section", { id: "trafego", className: "fm-card fm-anchor flex min-w-0 flex-col gap-4 p-5 lg:col-span-8", "aria-labelledby": "traffic-title" }, /* @__PURE__ */ import_react.default.createElement(SyncRing, { k: sync }), /* @__PURE__ */ import_react.default.createElement(
       CardHeader,
       {
         icon: import_lucide_react.Activity,
@@ -793,7 +877,7 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
     const s28 = ports.filter((p) => p.kind === "sfp28");
     return /* @__PURE__ */ import_react.default.createElement("div", { className: "overflow-x-auto fm-scroll" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "inline-flex min-w-full items-center gap-3 rounded-md border border-line-2 bg-[linear-gradient(180deg,#121c2e,#0b1220)] px-3 py-2.5 shadow-[inset_0_1px_0_rgb(255_255_255/.05)]" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "flex flex-col items-center gap-1" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono text-[8px] text-muted" }, "ETH"), port(eth, 24, 20)), /* @__PURE__ */ import_react.default.createElement("div", { className: "h-10 w-px bg-line-2" }), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex flex-col gap-1.5" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "flex gap-1" }, top.map((p) => port(p, 26, 16))), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex gap-1" }, bottom.map((p) => port(p, 26, 16)))), /* @__PURE__ */ import_react.default.createElement("div", { className: "h-10 w-px bg-line-2" }), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex flex-col gap-1.5" }, s28.map((p) => port(p, 26, 16))), /* @__PURE__ */ import_react.default.createElement("div", { className: "ml-auto hidden flex-col items-end sm:flex" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "font-display text-[11px] font-semibold tracking-wider text-ink-2" }, "CCR2004"), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono text-[8px] text-muted" }, "1G-12S+2XS"))));
   }
-  function EquipmentCard({ snap }) {
+  function EquipmentCard({ snap, sync }) {
     const [selected, setSelected] = (0, import_react.useState)("sfp-sfpplus1");
     const ports = (0, import_react.useMemo)(
       () => PORTS.map((p) => p.wan ? { ...p, up: !snap.wanDown } : p),
@@ -822,7 +906,7 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
       }
     ];
     const MetricHead = ({ icon: Icon, label }) => /* @__PURE__ */ import_react.default.createElement("span", { className: "flex items-center gap-1.5 text-ink-2" }, /* @__PURE__ */ import_react.default.createElement(Icon, { size: 14 }), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-label text-[11px]" }, label));
-    return /* @__PURE__ */ import_react.default.createElement("section", { className: "fm-card flex flex-col gap-4 p-5", "aria-labelledby": "equip-title" }, /* @__PURE__ */ import_react.default.createElement(
+    return /* @__PURE__ */ import_react.default.createElement("section", { id: "equipamento", className: "fm-card fm-anchor flex flex-col gap-4 p-5", "aria-labelledby": "equip-title" }, /* @__PURE__ */ import_react.default.createElement(SyncRing, { k: sync }), /* @__PURE__ */ import_react.default.createElement(
       CardHeader,
       {
         icon: import_lucide_react.Router,
@@ -852,7 +936,7 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
       if (el && stick.current) el.scrollTop = el.scrollHeight;
     }, [log]);
     const tone = { info: "text-electric", warning: "text-warn", critical: "text-crit" };
-    return /* @__PURE__ */ import_react.default.createElement("section", { className: "fm-card flex flex-col gap-3 p-5", "aria-labelledby": "log-title" }, /* @__PURE__ */ import_react.default.createElement(CardHeader, { icon: import_lucide_react.Terminal, title: /* @__PURE__ */ import_react.default.createElement("span", { id: "log-title" }, "Log do sistema"), subtitle: "/log print follow" }), /* @__PURE__ */ import_react.default.createElement(
+    return /* @__PURE__ */ import_react.default.createElement("section", { id: "log", className: "fm-card fm-anchor flex flex-col gap-3 p-5", "aria-labelledby": "log-title" }, /* @__PURE__ */ import_react.default.createElement(CardHeader, { icon: import_lucide_react.Terminal, title: /* @__PURE__ */ import_react.default.createElement("span", { id: "log-title" }, "Log do sistema"), subtitle: "/log print follow" }), /* @__PURE__ */ import_react.default.createElement(
       "div",
       {
         ref,
@@ -905,19 +989,51 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
       /* @__PURE__ */ import_react.default.createElement(import_lucide_react.RefreshCw, { size: 13 })
     )));
   }
-  function DevicesCard({ snap, onRenew }) {
+  function DeviceCard({ d, isNew, onRenew }) {
+    const cat = CATS[d.cat];
+    const Icon = ICONS[d.icon] || import_lucide_react.Smartphone;
+    const st = leaseState(d);
+    const pct = d.lease ? d.remaining / d.lease * 100 : 0;
+    const bar = { active: "bg-neon", expiring: "bg-warn", expired: "bg-crit" }[st];
+    return /* @__PURE__ */ import_react.default.createElement("li", { className: cx("rounded-lg border border-line bg-inset/50 p-3", isNew && "fm-row-in", st === "expired" && "fm-row-out") }, /* @__PURE__ */ import_react.default.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "grid h-9 w-9 flex-none place-items-center rounded-md border border-line-2 bg-inset", style: { color: cat.color } }, /* @__PURE__ */ import_react.default.createElement(Icon, { size: 16 })), /* @__PURE__ */ import_react.default.createElement("div", { className: "min-w-0 flex-1" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "truncate text-[14px] font-medium text-ink" }, d.name), /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-mono truncate text-[11px] text-muted" }, d.ip, " \xB7 ", cat.label)), st === "active" && /* @__PURE__ */ import_react.default.createElement(StatePill, { tone: "neon", icon: import_lucide_react.CircleCheck }, "Ativo"), st === "expiring" && /* @__PURE__ */ import_react.default.createElement(StatePill, { tone: "warn", icon: import_lucide_react.Hourglass }, "Expirando"), st === "expired" && /* @__PURE__ */ import_react.default.createElement(StatePill, { tone: "crit", icon: import_lucide_react.CircleAlert }, "Expirado")), /* @__PURE__ */ import_react.default.createElement("div", { className: "mt-3 flex items-center gap-3" }, /* @__PURE__ */ import_react.default.createElement(
+      "div",
+      {
+        className: "h-1.5 flex-1 overflow-hidden rounded-full bg-line",
+        role: "progressbar",
+        "aria-label": `Lease restante de ${d.name}`,
+        "aria-valuenow": d.remaining,
+        "aria-valuemin": 0,
+        "aria-valuemax": d.lease
+      },
+      /* @__PURE__ */ import_react.default.createElement("div", { className: cx("fm-bar h-full rounded-full", bar), style: { width: `${pct}%` } })
+    ), /* @__PURE__ */ import_react.default.createElement("span", { className: cx(
+      "fm-mono w-11 text-right text-[13px] font-semibold tabular-nums",
+      st === "expiring" ? "text-warn" : st === "expired" ? "text-crit" : "text-ink"
+    ) }, fmtMMSS(d.remaining)), /* @__PURE__ */ import_react.default.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: () => onRenew(d.id),
+        disabled: st === "expired",
+        "aria-label": `Renovar lease de ${d.name}`,
+        className: "fm-btn grid h-10 w-10 flex-none place-items-center rounded-md border border-line-2 text-ink-2 transition hover:border-electric/60 hover:text-electric disabled:opacity-30"
+      },
+      /* @__PURE__ */ import_react.default.createElement(import_lucide_react.RefreshCw, { size: 15 })
+    )), /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-mono mt-1.5 truncate text-[10px] text-muted" }, d.mac, " \xB7 lease ", fmtMMSS(d.lease)));
+  }
+  function DevicesCard({ snap, onRenew, sync }) {
     const live = snap.devices.filter((d) => d.status !== "expired");
     const total = live.length;
     const expiring = live.filter((d) => leaseState(d) === "expiring").length;
     const pie = CAT_ORDER.map((k) => ({ key: k, label: CATS[k].label, color: CATS[k].color, value: live.filter((d) => d.cat === k).length }));
     const rows = [...snap.devices].sort((a, b) => a.remaining - b.remaining || a.id - b.id);
-    return /* @__PURE__ */ import_react.default.createElement("section", { className: "fm-card flex min-w-0 flex-col gap-4 p-5", "aria-labelledby": "dev-title" }, /* @__PURE__ */ import_react.default.createElement(
+    return /* @__PURE__ */ import_react.default.createElement("section", { id: "dispositivos", className: "fm-card fm-anchor flex min-w-0 flex-col gap-4 p-5", "aria-labelledby": "dev-title" }, /* @__PURE__ */ import_react.default.createElement(SyncRing, { k: sync }), /* @__PURE__ */ import_react.default.createElement(
       CardHeader,
       {
         icon: import_lucide_react.Smartphone,
         title: /* @__PURE__ */ import_react.default.createElement("span", { id: "dev-title" }, "Dispositivos conectados"),
         subtitle: "dhcp-lan \xB7 pool 10.10.20.100\u2013250 \xB7 /ip dhcp-server lease",
-        right: /* @__PURE__ */ import_react.default.createElement(StatePill, { tone: "electric", icon: import_lucide_react.Timer }, "pr\xF3xima concess\xE3o em ~", Math.max(snap.nextJoin, 0), " s")
+        right: /* @__PURE__ */ import_react.default.createElement(StatePill, { tone: "electric", icon: import_lucide_react.Timer }, "pr\xF3xima concess\xE3o ~", Math.max(snap.nextJoin, 0), " s")
       }
     ), /* @__PURE__ */ import_react.default.createElement("div", { className: "grid grid-cols-1 items-center gap-5 md:grid-cols-[220px_1fr]" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "relative mx-auto h-[200px] w-[200px]" }, /* @__PURE__ */ import_react.default.createElement(import_recharts.ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ import_react.default.createElement(import_recharts.PieChart, null, /* @__PURE__ */ import_react.default.createElement(
       import_recharts.Pie,
@@ -935,7 +1051,467 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
         isAnimationActive: false
       },
       pie.map((p) => /* @__PURE__ */ import_react.default.createElement(import_recharts.Cell, { key: p.key, fill: p.color }))
-    ), /* @__PURE__ */ import_react.default.createElement(import_recharts.Tooltip, { content: /* @__PURE__ */ import_react.default.createElement(PieTooltip, { total }), isAnimationActive: false }))), /* @__PURE__ */ import_react.default.createElement("div", { className: "pointer-events-none absolute inset-0 grid place-items-center text-center" }, /* @__PURE__ */ import_react.default.createElement("div", null, /* @__PURE__ */ import_react.default.createElement("div", { key: total, className: "fm-bump font-display text-[40px] font-bold leading-none text-ink" }, total), /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-label mt-1 text-[10px] text-muted" }, "ativos")))), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex min-w-0 flex-col gap-4" }, /* @__PURE__ */ import_react.default.createElement("ul", { className: "grid grid-cols-2 gap-x-6 gap-y-2.5" }, pie.map((p) => /* @__PURE__ */ import_react.default.createElement("li", { key: p.key, className: "flex items-center gap-2.5" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "h-3 w-3 flex-none rounded-[3px]", style: { background: p.color } }), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-[13px] text-ink-2" }, p.label), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono ml-auto text-[14px] font-semibold tabular-nums text-ink" }, p.value), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono w-9 text-right text-[11px] tabular-nums text-muted" }, total ? nf(p.value / total * 100, 0) : 0, "%")))), /* @__PURE__ */ import_react.default.createElement("dl", { className: "grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-line bg-line" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "bg-panel px-3 py-2.5" }, /* @__PURE__ */ import_react.default.createElement("dt", { className: "fm-label text-[10px] text-muted" }, "Leases ativos"), /* @__PURE__ */ import_react.default.createElement("dd", { className: "fm-mono mt-0.5 text-[18px] font-semibold tabular-nums text-ink" }, total)), /* @__PURE__ */ import_react.default.createElement("div", { className: "bg-panel px-3 py-2.5" }, /* @__PURE__ */ import_react.default.createElement("dt", { className: "fm-label text-[10px] text-muted" }, "Expirando"), /* @__PURE__ */ import_react.default.createElement("dd", { className: cx("fm-mono mt-0.5 text-[18px] font-semibold tabular-nums", expiring ? "text-warn" : "text-ink") }, expiring)), /* @__PURE__ */ import_react.default.createElement("div", { className: "bg-panel px-3 py-2.5" }, /* @__PURE__ */ import_react.default.createElement("dt", { className: "fm-label text-[10px] text-muted" }, "Uso do pool"), /* @__PURE__ */ import_react.default.createElement("dd", { className: "fm-mono mt-0.5 text-[18px] font-semibold tabular-nums text-ink" }, nf(total / POOL_SIZE * 100, 1), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-[12px] text-muted" }, "% \xB7 ", total, "/", POOL_SIZE)))))), /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-scroll max-h-[440px] min-w-0 overflow-auto rounded-lg border border-line" }, /* @__PURE__ */ import_react.default.createElement("table", { className: "w-full min-w-[620px] border-collapse text-left" }, /* @__PURE__ */ import_react.default.createElement("caption", { className: "sr-only" }, "Leases DHCP ativos, ordenados pelo tempo restante"), /* @__PURE__ */ import_react.default.createElement("thead", { className: "sticky top-0 z-10 bg-inset" }, /* @__PURE__ */ import_react.default.createElement("tr", { className: "fm-label text-[10px] text-muted" }, /* @__PURE__ */ import_react.default.createElement("th", { scope: "col", className: "py-2 pl-4 pr-3 font-medium" }, "Dispositivo"), /* @__PURE__ */ import_react.default.createElement("th", { scope: "col", className: "px-3 font-medium" }, "IP \xB7 MAC"), /* @__PURE__ */ import_react.default.createElement("th", { scope: "col", className: "px-3 font-medium" }, "Lease restante"), /* @__PURE__ */ import_react.default.createElement("th", { scope: "col", className: "px-3 font-medium" }, "Status"), /* @__PURE__ */ import_react.default.createElement("th", { scope: "col", className: "pl-2 pr-4 text-right font-medium" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "sr-only" }, "A\xE7\xF5es")))), /* @__PURE__ */ import_react.default.createElement("tbody", null, rows.length === 0 && /* @__PURE__ */ import_react.default.createElement("tr", null, /* @__PURE__ */ import_react.default.createElement("td", { colSpan: 5, className: "px-4 py-10 text-center text-[13px] text-muted" }, "Nenhum lease ativo. Aguardando novas concess\xF5es DHCP\u2026")), rows.map((d) => /* @__PURE__ */ import_react.default.createElement(DeviceRow, { key: d.id, d, isNew: snap.tick - d.joinedTick < 3, onRenew }))))), /* @__PURE__ */ import_react.default.createElement("p", { className: "text-[11px] leading-relaxed text-muted" }, "Leases encurtados (45 s a 4 min) para o ciclo ficar vis\xEDvel. Ao zerar, o IP \xE9 liberado e o dispositivo sai da lista."));
+    ), /* @__PURE__ */ import_react.default.createElement(import_recharts.Tooltip, { content: /* @__PURE__ */ import_react.default.createElement(PieTooltip, { total }), isAnimationActive: false }))), /* @__PURE__ */ import_react.default.createElement("div", { className: "pointer-events-none absolute inset-0 grid place-items-center text-center" }, /* @__PURE__ */ import_react.default.createElement("div", null, /* @__PURE__ */ import_react.default.createElement("div", { key: total, className: "fm-bump font-display text-[40px] font-bold leading-none text-ink" }, total), /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-label mt-1 text-[10px] text-muted" }, "ativos")))), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex min-w-0 flex-col gap-4" }, /* @__PURE__ */ import_react.default.createElement("ul", { className: "grid grid-cols-2 gap-x-6 gap-y-2.5" }, pie.map((p) => /* @__PURE__ */ import_react.default.createElement("li", { key: p.key, className: "flex items-center gap-2.5" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "h-3 w-3 flex-none rounded-[3px]", style: { background: p.color } }), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-[13px] text-ink-2" }, p.label), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono ml-auto text-[14px] font-semibold tabular-nums text-ink" }, p.value), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono w-9 text-right text-[11px] tabular-nums text-muted" }, total ? nf(p.value / total * 100, 0) : 0, "%")))), /* @__PURE__ */ import_react.default.createElement("dl", { className: "grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-line bg-line" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "bg-panel px-3 py-2.5" }, /* @__PURE__ */ import_react.default.createElement("dt", { className: "fm-label text-[10px] text-muted" }, "Leases ativos"), /* @__PURE__ */ import_react.default.createElement("dd", { className: "fm-mono mt-0.5 text-[18px] font-semibold tabular-nums text-ink" }, total)), /* @__PURE__ */ import_react.default.createElement("div", { className: "bg-panel px-3 py-2.5" }, /* @__PURE__ */ import_react.default.createElement("dt", { className: "fm-label text-[10px] text-muted" }, "Expirando"), /* @__PURE__ */ import_react.default.createElement("dd", { className: cx("fm-mono mt-0.5 text-[18px] font-semibold tabular-nums", expiring ? "text-warn" : "text-ink") }, expiring)), /* @__PURE__ */ import_react.default.createElement("div", { className: "bg-panel px-3 py-2.5" }, /* @__PURE__ */ import_react.default.createElement("dt", { className: "fm-label text-[10px] text-muted" }, "Uso do pool"), /* @__PURE__ */ import_react.default.createElement("dd", { className: "fm-mono mt-0.5 text-[18px] font-semibold tabular-nums text-ink" }, nf(total / POOL_SIZE * 100, 1), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-[12px] text-muted" }, "% \xB7 ", total, "/", POOL_SIZE)))))), /* @__PURE__ */ import_react.default.createElement("ul", { className: "flex flex-col gap-2 md:hidden", "aria-label": "Leases DHCP ativos, ordenados pelo tempo restante" }, rows.length === 0 && /* @__PURE__ */ import_react.default.createElement("li", { className: "rounded-lg border border-dashed border-line-2 px-4 py-8 text-center text-[13px] text-muted" }, "Nenhum lease ativo. Aguardando novas concess\xF5es DHCP\u2026"), rows.map((d) => /* @__PURE__ */ import_react.default.createElement(DeviceCard, { key: d.id, d, isNew: snap.tick - d.joinedTick < 3, onRenew }))), /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-scroll hidden max-h-[440px] min-w-0 overflow-auto rounded-lg border border-line md:block" }, /* @__PURE__ */ import_react.default.createElement("table", { className: "w-full min-w-[620px] border-collapse text-left" }, /* @__PURE__ */ import_react.default.createElement("caption", { className: "sr-only" }, "Leases DHCP ativos, ordenados pelo tempo restante"), /* @__PURE__ */ import_react.default.createElement("thead", { className: "sticky top-0 z-10 bg-inset" }, /* @__PURE__ */ import_react.default.createElement("tr", { className: "fm-label text-[10px] text-muted" }, /* @__PURE__ */ import_react.default.createElement("th", { scope: "col", className: "py-2 pl-4 pr-3 font-medium" }, "Dispositivo"), /* @__PURE__ */ import_react.default.createElement("th", { scope: "col", className: "px-3 font-medium" }, "IP \xB7 MAC"), /* @__PURE__ */ import_react.default.createElement("th", { scope: "col", className: "px-3 font-medium" }, "Lease restante"), /* @__PURE__ */ import_react.default.createElement("th", { scope: "col", className: "px-3 font-medium" }, "Status"), /* @__PURE__ */ import_react.default.createElement("th", { scope: "col", className: "pl-2 pr-4 text-right font-medium" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "sr-only" }, "A\xE7\xF5es")))), /* @__PURE__ */ import_react.default.createElement("tbody", null, rows.length === 0 && /* @__PURE__ */ import_react.default.createElement("tr", null, /* @__PURE__ */ import_react.default.createElement("td", { colSpan: 5, className: "px-4 py-10 text-center text-[13px] text-muted" }, "Nenhum lease ativo. Aguardando novas concess\xF5es DHCP\u2026")), rows.map((d) => /* @__PURE__ */ import_react.default.createElement(DeviceRow, { key: d.id, d, isNew: snap.tick - d.joinedTick < 3, onRenew }))))), /* @__PURE__ */ import_react.default.createElement("p", { className: "text-[11px] leading-relaxed text-muted" }, "Leases encurtados (45 s a 4 min) para o ciclo ficar vis\xEDvel. Ao zerar, o IP \xE9 liberado e o dispositivo sai da lista."));
+  }
+  var NOC_SRC = { name: "noc-ws", ip: "10.10.20.10" };
+  var GW = { name: "fm-edge-01.lan", ip: "10.10.20.1" };
+  var ISP_HOPS = [{ ip: "203.0.113.1", rtt: 1.6 }, { ip: "198.51.100.17", rtt: 3.4 }];
+  var KNOWN_HOSTS = {
+    "google.com": "142.250.79.46",
+    "www.google.com": "142.250.79.68",
+    "dns.google": "8.8.8.8",
+    "cloudflare.com": "104.16.132.229",
+    "one.one.one.one": "1.1.1.1",
+    "github.com": "140.82.112.4",
+    "mikrotik.com": "159.148.147.196",
+    "registro.br": "200.160.2.3",
+    localhost: "127.0.0.1",
+    gateway: GW.ip,
+    "fm-edge-01": GW.ip,
+    "fm-edge-01.lan": GW.ip,
+    "noc-ws": NOC_SRC.ip
+  };
+  var KNOWN_PROFILES = [
+    ["8.8.", { extra: 0, ttl: 117, hops: 7 }],
+    ["142.250.", { extra: 0.6, ttl: 117, hops: 7 }],
+    ["1.1.1.", { extra: 1, ttl: 57, hops: 6 }],
+    ["1.0.0.", { extra: 1, ttl: 57, hops: 6 }],
+    ["104.16.", { extra: 1.4, ttl: 57, hops: 6 }],
+    ["200.160.", { extra: 19, ttl: 56, hops: 8 }],
+    ["140.82.", { extra: 126, ttl: 49, hops: 13 }],
+    ["159.148.", { extra: 208, ttl: 51, hops: 14 }]
+  ];
+  var IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+  var HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+  var PUBLIC_FIRST_OCTETS = [23, 34, 45, 52, 64, 104, 151, 177, 185, 186, 187, 189, 191, 199, 200, 201];
+  var hashStr = (str) => {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  };
+  var gauss = () => (Math.random() + Math.random() + Math.random() - 1.5) / 1.5;
+  var fmtRtt = (v) => v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v >= 1 ? v.toFixed(2) : v.toFixed(3);
+  var ms3 = (v) => `${v.toFixed(3)} ms`;
+  function resolveHost(raw) {
+    const q = raw.trim().toLowerCase();
+    if (!q) return { error: "empty" };
+    const m = q.match(IPV4_RE);
+    if (m) {
+      if (m.slice(1).some((n) => Number(n) > 255)) return { error: "unknown" };
+      return { host: q, ip: q, isIp: true };
+    }
+    if (!HOST_RE.test(q)) return { error: "unknown" };
+    if (KNOWN_HOSTS[q]) return { host: q, ip: KNOWN_HOSTS[q] };
+    if (!q.includes(".")) return { error: "unknown" };
+    const h = hashStr(q);
+    const first = PUBLIC_FIRST_OCTETS[h % PUBLIC_FIRST_OCTETS.length];
+    return { host: q, ip: `${first}.${h >>> 8 & 255}.${h >>> 16 & 255}.${(h >>> 24 & 253) + 1}` };
+  }
+  function profileFor(ip) {
+    const known = KNOWN_PROFILES.find(([prefix]) => ip.startsWith(prefix));
+    if (known) return known[1];
+    const h = hashStr(ip);
+    const band = h % 3;
+    const hops = band === 0 ? 7 + (h >>> 8) % 2 : band === 1 ? 9 + (h >>> 8) % 2 : 11 + (h >>> 8) % 3;
+    const extra = band === 0 ? 2 + (h >>> 4) % 9 : band === 1 ? 28 + (h >>> 4) % 25 : 115 + (h >>> 4) % 80;
+    return { extra, hops, ttl: ((h >>> 12) % 2 ? 64 : 128) - hops + 1 };
+  }
+  function classifyTarget(ip, sim) {
+    const [a, b, c] = ip.split(".").map(Number);
+    if (a === 127) return { kind: "loopback" };
+    if (ip === NOC_SRC.ip) return { kind: "self" };
+    if (ip === GW.ip || ip === "10.10.10.1") return { kind: "gateway" };
+    if (a === 10 && b === 10 && c === 20) {
+      const dev = sim.lookupLan(ip);
+      return dev ? { kind: "lan", dev } : { kind: "lan-miss" };
+    }
+    if (a === 0 || a >= 224) return { kind: "invalid" };
+    if (a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 100 && b >= 64 && b <= 127 || a === 169 && b === 254) {
+      return { kind: "private" };
+    }
+    return { kind: "public", prof: profileFor(ip) };
+  }
+  var wanRtt = (sim) => typeof sim.latency === "number" ? sim.latency : 12;
+  function sampleRtt(cls, sim) {
+    switch (cls.kind) {
+      case "loopback":
+      case "self":
+        return rand(0.025, 0.07);
+      case "gateway":
+        return rand(0.18, 0.55);
+      case "lan": {
+        const cat = cls.dev.cat;
+        if (cat === "server") return rand(0.25, 0.8);
+        if (cat === "laptop") return rand(1.8, 9);
+        return Math.random() < 0.2 ? rand(25, 90) : rand(3, 18);
+      }
+      default:
+        return Math.max(0.6, wanRtt(sim) + cls.prof.extra + gauss() * Math.max(0.6, sim.jitter || 1));
+    }
+  }
+  var ttlFor = (cls) => cls.kind === "public" ? cls.prof.ttl : cls.kind === "lan" && cls.dev.cat === "laptop" ? 128 : 64;
+  function lossFor(cls, sim) {
+    if (cls.kind === "public") return (sim.loss || 0) / 100 + 4e-3;
+    if (cls.kind === "lan" && (cls.dev.cat === "mobile" || cls.dev.cat === "iot")) return 0.03;
+    return 0;
+  }
+  var termSeq = 0;
+  var L = (kind, text) => ({ id: ++termSeq, kind, text });
+  function planPing(res, cls, sim) {
+    const from = res.isIp ? res.ip : `${res.host} (${res.ip})`;
+    const head = [L("out", `PING ${res.host} (${res.ip}) 56(84) bytes of data.`)];
+    const packets = [];
+    for (let seq = 1; seq <= 4; seq++) {
+      const pk = { seq, ok: false, err: false, rtt: null };
+      if (sim.wanDown && (cls.kind === "public" || cls.kind === "private")) {
+        pk.err = true;
+        pk.line = L("err", `From ${GW.ip} icmp_seq=${seq} Destination Net Unreachable`);
+      } else if (cls.kind === "lan-miss") {
+        pk.err = true;
+        pk.line = L("err", `From ${NOC_SRC.ip} icmp_seq=${seq} Destination Host Unreachable`);
+      } else if (cls.kind === "private" || Math.random() < lossFor(cls, sim)) {
+        pk.line = L("dim", `no answer yet for icmp_seq=${seq}`);
+      } else {
+        pk.ok = true;
+        pk.rtt = sampleRtt(cls, sim);
+        pk.line = L("out", `64 bytes from ${from}: icmp_seq=${seq} ttl=${ttlFor(cls)} time=${fmtRtt(pk.rtt)} ms`);
+      }
+      packets.push(pk);
+    }
+    return { head, packets };
+  }
+  function pingStats(res, sent) {
+    const tx = sent.length;
+    const ok = sent.filter((p) => p.ok);
+    const errs = sent.filter((p) => p.err).length;
+    const loss = tx ? Math.round(100 * (tx - ok.length) / tx) : 0;
+    const time = Math.max(0, (tx - 1) * 1e3 + randInt(2, 9));
+    const lines = [
+      L("blank", ""),
+      L("stat", `--- ${res.host} ping statistics ---`),
+      L(loss === 100 ? "err" : "stat", `${tx} packets transmitted, ${ok.length} received${errs ? `, +${errs} errors` : ""}, ${loss}% packet loss, time ${time}ms`)
+    ];
+    if (ok.length) {
+      const r = ok.map((p) => p.rtt);
+      const mean = r.reduce((s, v) => s + v, 0) / r.length;
+      const mdev = Math.sqrt(r.reduce((s, v) => s + (v - mean) ** 2, 0) / r.length);
+      lines.push(L("stat", `rtt min/avg/max/mdev = ${Math.min(...r).toFixed(3)}/${mean.toFixed(3)}/${Math.max(...r).toFixed(3)}/${mdev.toFixed(3)} ms`));
+    }
+    return lines;
+  }
+  var hopLine = (n, name, ip, rtts, flag = "") => `${String(n).padStart(2, " ")}  ${name} (${ip})  ${rtts.map((t) => `${ms3(t)}${flag}`).join("  ")}`;
+  var three = (base, spread) => [0, 1, 2].map(() => Math.max(0.05, base + gauss() * spread));
+  function planTrace(res, cls, sim) {
+    const head = [L("out", `traceroute to ${res.host} (${res.ip}), 30 hops max, 60 byte packets`)];
+    const hops = [];
+    const add = (line, delay = rand(260, 600)) => hops.push({ delay, line });
+    const destName = res.isIp ? res.ip : res.host;
+    if (cls.kind === "loopback" || cls.kind === "self") {
+      add(L("out", hopLine(1, cls.kind === "self" ? NOC_SRC.name : "localhost", res.ip, three(0.03, 0.01))));
+    } else if (cls.kind === "gateway") {
+      add(L("out", hopLine(1, GW.name, res.ip, three(0.4, 0.08))));
+    } else if (cls.kind === "lan") {
+      add(L("out", hopLine(1, destName, res.ip, three(sampleRtt(cls, sim), 0.6))));
+    } else if (cls.kind === "lan-miss") {
+      add(L("err", hopLine(1, NOC_SRC.name, NOC_SRC.ip, three(3006, 0.6), " !H")), 3e3);
+    } else if (sim.wanDown) {
+      add(L("err", hopLine(1, GW.name, GW.ip, three(0.4, 0.08), " !N")));
+    } else if (cls.kind === "private") {
+      add(L("out", hopLine(1, GW.name, GW.ip, three(0.4, 0.08))));
+      add(L("out", hopLine(2, ISP_HOPS[0].ip, ISP_HOPS[0].ip, three(ISP_HOPS[0].rtt, 0.3))));
+      for (let n = 3; n <= 6; n++) add(L("dim", `${String(n).padStart(2, " ")}  * * *`), 1100);
+      hops.push({ delay: 200, line: L("dim", "(sem resposta ap\xF3s 6 saltos: endere\xE7o privado fora desta rede)") });
+    } else {
+      const { hops: total, extra } = cls.prof;
+      const h = hashStr(res.ip);
+      const dest = wanRtt(sim) + extra;
+      const [a, b] = res.ip.split(".").map(Number);
+      const transit = extra > 100 ? [4, 62, 80, 129, 154] : [177, 187, 189, 200, 201];
+      const silent = total > 7 ? 4 + h % 3 : -1;
+      add(L("out", hopLine(1, GW.name, GW.ip, three(0.4, 0.08))));
+      ISP_HOPS.forEach((hop, i) => add(L("out", hopLine(i + 2, hop.ip, hop.ip, three(hop.rtt + wanRtt(sim) * 0.08, 0.3)))));
+      for (let n = 4; n < total; n++) {
+        if (n === silent) {
+          add(L("dim", `${String(n).padStart(2, " ")}  * * *`), 1100);
+          continue;
+        }
+        const near = n >= total - 2;
+        const ip = near ? `${a}.${b}.${h >>> n & 255}.${(h >>> n + 3 & 253) + 1}` : `${transit[(h + n) % transit.length]}.${h >>> n * 2 & 255}.${h >>> n * 3 & 255}.${(h >>> n & 253) + 1}`;
+        const base = 3.4 + (dest - 3.4) * ((n - 3) / (total - 3));
+        add(L("out", hopLine(n, ip, ip, three(base, Math.max(0.4, base * 0.04)))));
+      }
+      add(L("out", hopLine(total, destName, res.ip, three(dest, Math.max(0.4, dest * 0.03)))));
+    }
+    return { head, hops };
+  }
+  var QUICK_TARGETS = ["8.8.8.8", "1.1.1.1", "google.com", "gateway"];
+  function TermLine({ l }) {
+    if (l.kind === "cmd") {
+      return /* @__PURE__ */ import_react.default.createElement("div", { className: "[overflow-wrap:anywhere]" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "text-electric" }, "noc@", NOC_SRC.name), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-ink-2" }, ":"), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-electric" }, "~"), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-ink-2" }, "$ "), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-ink [text-shadow:none]" }, l.text));
+    }
+    const tone = {
+      out: "",
+      stat: "font-semibold",
+      info: "text-electric",
+      ctrl: "text-ink",
+      err: "text-crit [text-shadow:none]",
+      dim: "opacity-60",
+      blank: ""
+    }[l.kind];
+    return /* @__PURE__ */ import_react.default.createElement("div", { className: cx("whitespace-pre-wrap [overflow-wrap:anywhere]", tone) }, l.text || "\xA0");
+  }
+  function DiagnosticsTerminal({ sim, devices }) {
+    const [host, setHost] = (0, import_react.useState)("8.8.8.8");
+    const [error, setError] = (0, import_react.useState)("");
+    const [running, setRunning] = (0, import_react.useState)(null);
+    const [lines, setLines] = (0, import_react.useState)(() => [
+      L("info", "FlowMonitor diag shell \xB7 origem noc-ws (10.10.20.10) \xB7 gateway FM-EDGE-01 (10.10.20.1)"),
+      L("dim", "Digite um host ou IP e escolha Ping ou Tracert. As respostas s\xE3o simuladas a partir do estado da rede."),
+      L("blank", "")
+    ]);
+    const job = (0, import_react.useRef)(0);
+    const timers = (0, import_react.useRef)([]);
+    const runningRef = (0, import_react.useRef)(null);
+    const progress = (0, import_react.useRef)(null);
+    const outRef = (0, import_react.useRef)(null);
+    const stick = (0, import_react.useRef)(true);
+    const inputRef = (0, import_react.useRef)(null);
+    const push = (0, import_react.useCallback)((...ls) => setLines((prev) => [...prev, ...ls].slice(-400)), []);
+    const clearTimers = () => {
+      timers.current.forEach(clearTimeout);
+      timers.current = [];
+    };
+    const later = (fn, ms) => timers.current.push(setTimeout(fn, ms));
+    (0, import_react.useEffect)(() => () => clearTimers(), []);
+    (0, import_react.useEffect)(() => {
+      const el = outRef.current;
+      if (el && stick.current) el.scrollTop = el.scrollHeight;
+    }, [lines, running]);
+    const finish = () => {
+      runningRef.current = null;
+      progress.current = null;
+      setRunning(null);
+    };
+    const start = (kind) => {
+      var _a;
+      if (runningRef.current) return;
+      const raw = host.trim();
+      const res = resolveHost(raw);
+      if (res.error === "empty") {
+        setError("Digite um host ou endere\xE7o IP de destino.");
+        (_a = inputRef.current) == null ? void 0 : _a.focus();
+        return;
+      }
+      setError("");
+      stick.current = true;
+      push(L("cmd", kind === "ping" ? `ping -c 4 -O ${raw}` : `traceroute ${raw}`));
+      if (res.error) {
+        push(
+          ...kind === "ping" ? [L("err", `ping: ${raw}: Name or service not known`)] : [L("err", `${raw}: Name or service not known`), L("err", `Cannot handle "host" cmdline arg \`${raw}' on position 1 (argc 1)`)],
+          L("blank", "")
+        );
+        return;
+      }
+      const cls = classifyTarget(res.ip, sim);
+      if (cls.kind === "invalid") {
+        push(L("err", kind === "ping" ? "ping: connect: Invalid argument" : `${raw}: Invalid argument`), L("blank", ""));
+        return;
+      }
+      const my = ++job.current;
+      runningRef.current = kind;
+      setRunning(kind);
+      if (kind === "ping") {
+        const plan = planPing(res, cls, sim);
+        push(...plan.head);
+        progress.current = { kind, res, sent: [] };
+        plan.packets.forEach((pk, i) => later(() => {
+          if (job.current !== my) return;
+          progress.current.sent.push(pk);
+          push(pk.line);
+          if (i === plan.packets.length - 1) {
+            later(() => {
+              if (job.current !== my) return;
+              push(...pingStats(res, progress.current.sent), L("blank", ""));
+              finish();
+            }, 260);
+          }
+        }, 320 + i * 1e3));
+      } else {
+        const plan = planTrace(res, cls, sim);
+        push(...plan.head);
+        progress.current = { kind, res };
+        let t = 0;
+        plan.hops.forEach((hop, i) => {
+          t += hop.delay;
+          later(() => {
+            if (job.current !== my) return;
+            push(hop.line);
+            if (i === plan.hops.length - 1) {
+              push(L("blank", ""));
+              finish();
+            }
+          }, t);
+        });
+      }
+    };
+    const stop = () => {
+      if (!runningRef.current) return;
+      job.current++;
+      clearTimers();
+      const p = progress.current;
+      push(L("ctrl", "^C"));
+      if (p && p.kind === "ping") push(...pingStats(p.res, p.sent));
+      push(L("blank", ""));
+      finish();
+    };
+    const clear = () => {
+      if (runningRef.current) return;
+      setLines([L("dim", "Terminal limpo."), L("blank", "")]);
+    };
+    const lanTarget = (0, import_react.useMemo)(() => {
+      const live = devices.filter((d) => d.status !== "expired");
+      return live.find((d) => d.cat === "server") || live[0] || null;
+    }, [devices]);
+    const chips = [...QUICK_TARGETS.map((t) => ({ value: t, label: t })), ...lanTarget ? [{ value: lanTarget.ip, label: lanTarget.ip, title: `${lanTarget.name} (lease DHCP)` }] : []];
+    return /* @__PURE__ */ import_react.default.createElement("section", { id: "terminal", className: "fm-card fm-anchor flex min-w-0 flex-col gap-4 p-5 lg:col-span-12", "aria-labelledby": "term-title" }, /* @__PURE__ */ import_react.default.createElement(
+      CardHeader,
+      {
+        icon: import_lucide_react.SquareTerminal,
+        title: /* @__PURE__ */ import_react.default.createElement("span", { id: "term-title" }, "Terminal de Diagn\xF3sticos"),
+        subtitle: "ICMP echo \xB7 traceroute UDP \xB7 origem noc-ws 10.10.20.10",
+        right: running ? /* @__PURE__ */ import_react.default.createElement(StatePill, { tone: "electric", icon: running === "ping" ? import_lucide_react.Activity : import_lucide_react.Route, blink: true }, "executando ", running === "ping" ? "ping" : "traceroute") : /* @__PURE__ */ import_react.default.createElement(StatePill, { tone: "muted", icon: import_lucide_react.SquareTerminal }, "pronto")
+      }
+    ), /* @__PURE__ */ import_react.default.createElement("div", { className: "grid min-w-0 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]" }, /* @__PURE__ */ import_react.default.createElement("form", { className: "flex min-w-0 flex-col gap-3", onSubmit: (e) => {
+      e.preventDefault();
+      start("ping");
+    }, noValidate: true }, /* @__PURE__ */ import_react.default.createElement("label", { htmlFor: "fm-term-host", className: "fm-label text-[11px] text-ink-2" }, "Host / IP de destino"), /* @__PURE__ */ import_react.default.createElement(
+      "input",
+      {
+        id: "fm-term-host",
+        ref: inputRef,
+        value: host,
+        onChange: (e) => {
+          setHost(e.target.value);
+          if (error) setError("");
+        },
+        onKeyDown: (e) => {
+          var _a;
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && runningRef.current && !((_a = window.getSelection()) == null ? void 0 : _a.toString())) {
+            e.preventDefault();
+            stop();
+          }
+        },
+        placeholder: "8.8.8.8 ou google.com",
+        autoComplete: "off",
+        autoCapitalize: "none",
+        autoCorrect: "off",
+        spellCheck: false,
+        inputMode: "url",
+        enterKeyHint: "go",
+        "aria-invalid": !!error,
+        "aria-describedby": error ? "fm-term-err" : void 0,
+        className: "fm-term-input fm-mono h-11 w-full rounded-md px-3 text-[14px]"
+      }
+    ), error && /* @__PURE__ */ import_react.default.createElement("p", { id: "fm-term-err", className: "text-[12px] text-crit" }, error), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex flex-wrap gap-1.5", "aria-label": "Destinos r\xE1pidos" }, chips.map((c) => /* @__PURE__ */ import_react.default.createElement(
+      "button",
+      {
+        key: c.value,
+        type: "button",
+        onClick: () => {
+          setHost(c.value);
+          setError("");
+        },
+        title: c.title || c.value,
+        className: cx(
+          "fm-btn fm-mono rounded border px-2 py-1 text-[11px] transition",
+          host.trim().toLowerCase() === c.value ? "border-neon/60 text-neon" : "border-line-2 text-ink-2 hover:border-neon/40 hover:text-neon"
+        )
+      },
+      c.label
+    ))), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex flex-col gap-2" }, /* @__PURE__ */ import_react.default.createElement("button", { type: "submit", disabled: !!running, className: "fm-btn fm-term-btn h-11 whitespace-nowrap rounded-md px-3 text-[13px] font-semibold text-neon" }, "[ Executar Ping ]"), /* @__PURE__ */ import_react.default.createElement("button", { type: "button", onClick: () => start("tracert"), disabled: !!running, className: "fm-btn fm-term-btn h-11 whitespace-nowrap rounded-md px-3 text-[13px] font-semibold text-electric" }, "[ Executar Tracert ]")), /* @__PURE__ */ import_react.default.createElement("div", { className: "grid grid-cols-2 gap-2" }, /* @__PURE__ */ import_react.default.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: stop,
+        disabled: !running,
+        className: "fm-btn fm-term-btn inline-flex h-10 items-center justify-center gap-1.5 rounded-md text-[12px] text-crit"
+      },
+      /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Square, { size: 12 }),
+      " Parar (Ctrl+C)"
+    ), /* @__PURE__ */ import_react.default.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: clear,
+        disabled: !!running,
+        className: "fm-btn fm-term-btn inline-flex h-10 items-center justify-center gap-1.5 rounded-md text-[12px] text-ink-2"
+      },
+      /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Eraser, { size: 13 }),
+      " Limpar"
+    )), /* @__PURE__ */ import_react.default.createElement("p", { className: "text-[11px] leading-relaxed text-muted" }, "Com a WAN em falha, destinos externos retornam ", /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono" }, "Net Unreachable"), ". Um IP do pool sem lease ativo retorna ", /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono" }, "Host Unreachable"), ".")), /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-term flex min-w-0 flex-col overflow-hidden" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "flex items-center gap-2 border-b border-neon/15 px-3 py-2" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "h-2.5 w-2.5 rounded-full bg-crit/80" }), /* @__PURE__ */ import_react.default.createElement("span", { className: "h-2.5 w-2.5 rounded-full bg-warn/80" }), /* @__PURE__ */ import_react.default.createElement("span", { className: "h-2.5 w-2.5 rounded-full bg-neon/80" }), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono ml-2 truncate text-[11px] text-ink-2" }, "noc@noc-ws: ~ \xB7 bash")), /* @__PURE__ */ import_react.default.createElement(
+      "div",
+      {
+        ref: outRef,
+        onScroll: (e) => {
+          const el = e.currentTarget;
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        },
+        onClick: () => {
+          var _a;
+          return (_a = inputRef.current) == null ? void 0 : _a.focus({ preventScroll: true });
+        },
+        className: "fm-scroll fm-mono fm-term-out h-[300px] overflow-auto px-3 py-2.5 text-[11px] leading-[1.65] sm:h-[360px] sm:text-[12.5px]",
+        role: "log",
+        "aria-live": "polite",
+        "aria-label": "Sa\xEDda do terminal"
+      },
+      lines.map((l) => /* @__PURE__ */ import_react.default.createElement(TermLine, { key: l.id, l })),
+      running ? /* @__PURE__ */ import_react.default.createElement("div", null, /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-cursor", "aria-hidden": "true" })) : /* @__PURE__ */ import_react.default.createElement("div", null, /* @__PURE__ */ import_react.default.createElement("span", { className: "text-electric" }, "noc@noc-ws"), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-ink-2" }, ":"), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-electric" }, "~"), /* @__PURE__ */ import_react.default.createElement("span", { className: "text-ink-2" }, "$ "), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-cursor", "aria-hidden": "true" }))
+    ))));
+  }
+  var NAV_ITEMS = [
+    { id: "status", label: "Status", Icon: import_lucide_react.Network },
+    { id: "trafego", label: "Tr\xE1fego", Icon: import_lucide_react.Activity },
+    { id: "equipamento", label: "Ativo", Icon: import_lucide_react.Router },
+    { id: "dispositivos", label: "Leases", Icon: import_lucide_react.Smartphone },
+    { id: "terminal", label: "Terminal", Icon: import_lucide_react.SquareTerminal }
+  ];
+  function BottomNav() {
+    const [active, setActive] = (0, import_react.useState)("status");
+    (0, import_react.useEffect)(() => {
+      if (typeof window === "undefined" || !("IntersectionObserver" in window)) return void 0;
+      const els = NAV_ITEMS.map((n) => document.getElementById(n.id)).filter(Boolean);
+      const io = new IntersectionObserver((entries) => {
+        const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (vis[0]) setActive(vis[0].target.id);
+      }, { rootMargin: "-110px 0px -55% 0px", threshold: 0 });
+      els.forEach((el) => io.observe(el));
+      return () => io.disconnect();
+    }, []);
+    const go = (id) => {
+      var _a;
+      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      (_a = document.getElementById(id)) == null ? void 0 : _a.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+      setActive(id);
+    };
+    return /* @__PURE__ */ import_react.default.createElement("nav", { className: "fm-bottomnav md:hidden", "aria-label": "Se\xE7\xF5es do painel" }, /* @__PURE__ */ import_react.default.createElement("ul", { className: "grid grid-cols-5" }, NAV_ITEMS.map((n) => {
+      const on = active === n.id;
+      return /* @__PURE__ */ import_react.default.createElement("li", { key: n.id }, /* @__PURE__ */ import_react.default.createElement(
+        "button",
+        {
+          type: "button",
+          onClick: () => go(n.id),
+          "aria-current": on ? "true" : void 0,
+          className: cx("fm-btn relative flex h-14 w-full flex-col items-center justify-center gap-1 transition", on ? "text-electric" : "text-muted hover:text-ink-2")
+        },
+        /* @__PURE__ */ import_react.default.createElement("span", { className: cx("absolute top-0 h-0.5 w-8 rounded-full transition", on ? "bg-electric shadow-[0_0_10px_rgb(var(--electric))]" : "bg-transparent") }),
+        /* @__PURE__ */ import_react.default.createElement(n.Icon, { size: 19, strokeWidth: on ? 2.3 : 2 }),
+        /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-label text-[9.5px] leading-none" }, n.label)
+      ));
+    })));
   }
   var TOAST_MS = 5e3;
   function Toast({ t, onDismiss }) {
@@ -968,6 +1544,10 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
     const [snap, setSnap] = (0, import_react.useState)(() => sim.snapshot());
     const [running, setRunning] = (0, import_react.useState)(true);
     const [toasts, setToasts] = (0, import_react.useState)([]);
+    const [refreshing, setRefreshing] = (0, import_react.useState)(false);
+    const [syncKey, setSyncKey] = (0, import_react.useState)(0);
+    const refreshingRef = (0, import_react.useRef)(false);
+    const online = useOnline();
     const pushToast = (0, import_react.useCallback)((t) => {
       const id = ++toastSeq;
       setToasts((ts) => [...ts, { id, ...t }].slice(-4));
@@ -1004,8 +1584,40 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
       sim.renew(id);
       setSnap(sim.snapshot());
     }, [sim]);
+    const refresh = (0, import_react.useCallback)(() => {
+      if (refreshingRef.current) return;
+      refreshingRef.current = true;
+      setRefreshing(true);
+      const r = sim.refresh();
+      const s = sim.snapshot();
+      setSnap(s);
+      setSyncKey((k) => k + 1);
+      pushToast({
+        tone: "ok",
+        icon: import_lucide_react.RefreshCw,
+        title: "M\xE9tricas atualizadas",
+        body: `${s.wanDown ? "WAN sem resposta" : `ping ${nf(s.latency, 1)} ms`} \xB7 CPU ${nf(s.cpu, 0)}% \xB7 ${fmtRate(s.tr.wanIn)} \u2193`,
+        meta: `${r.bound} leases ativos \xB7 ${r.expiring} expirando${r.purged ? ` \xB7 ${r.purged} removidos` : ""}`
+      });
+      setTimeout(() => {
+        refreshingRef.current = false;
+        setRefreshing(false);
+      }, 800);
+    }, [sim, pushToast]);
     const activeCount = snap.devices.filter((d) => d.status !== "expired").length;
-    return /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-app text-ink" }, /* @__PURE__ */ import_react.default.createElement("style", null, GLOBAL_CSS), /* @__PURE__ */ import_react.default.createElement(Header, { running, onToggle: () => setRunning((r) => !r), wanDown: snap.wanDown }), /* @__PURE__ */ import_react.default.createElement("main", { className: "fm-gutter mx-auto max-w-[1600px]", style: { paddingBlock: 20 } }, /* @__PURE__ */ import_react.default.createElement("div", { className: "grid grid-cols-1 gap-4 lg:grid-cols-12" }, /* @__PURE__ */ import_react.default.createElement(StatusCard, { snap, running, onToggleFailure: toggleFailure, activeCount }), /* @__PURE__ */ import_react.default.createElement(TrafficCard, { snap }), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex min-w-0 flex-col gap-4 lg:col-span-5" }, /* @__PURE__ */ import_react.default.createElement(EquipmentCard, { snap }), /* @__PURE__ */ import_react.default.createElement(LogCard, { log: snap.log })), /* @__PURE__ */ import_react.default.createElement("div", { className: "min-w-0 lg:col-span-7" }, /* @__PURE__ */ import_react.default.createElement(DevicesCard, { snap, onRenew: renew }))), /* @__PURE__ */ import_react.default.createElement("footer", { className: "fm-mono mt-6 flex flex-wrap justify-between gap-2 text-[11px] text-muted" }, /* @__PURE__ */ import_react.default.createElement("span", null, "FlowMonitor \xB7 dados simulados no navegador, nenhum equipamento real \xE9 consultado."), /* @__PURE__ */ import_react.default.createElement("span", null, "tick #", snap.tick, " \xB7 atualiza\xE7\xE3o 1 s"))), /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-toasts", "aria-live": "polite" }, toasts.map((t) => /* @__PURE__ */ import_react.default.createElement(Toast, { key: t.id, t, onDismiss: dismissToast }))));
+    return /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-app text-ink" }, /* @__PURE__ */ import_react.default.createElement("style", null, GLOBAL_CSS), /* @__PURE__ */ import_react.default.createElement(
+      Header,
+      {
+        running,
+        onToggle: () => setRunning((r) => !r),
+        wanDown: snap.wanDown,
+        onRefresh: refresh,
+        refreshing,
+        refreshCount: syncKey,
+        online,
+        lastSync: snap.now
+      }
+    ), /* @__PURE__ */ import_react.default.createElement("main", { className: "fm-main fm-gutter mx-auto max-w-[1600px]", style: { paddingBlock: 20 } }, /* @__PURE__ */ import_react.default.createElement("div", { className: "grid grid-cols-1 gap-4 lg:grid-cols-12" }, /* @__PURE__ */ import_react.default.createElement(StatusCard, { snap, running, onToggleFailure: toggleFailure, activeCount, sync: syncKey }), /* @__PURE__ */ import_react.default.createElement(TrafficCard, { snap, sync: syncKey }), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex min-w-0 flex-col gap-4 lg:col-span-5" }, /* @__PURE__ */ import_react.default.createElement(EquipmentCard, { snap, sync: syncKey }), /* @__PURE__ */ import_react.default.createElement(LogCard, { log: snap.log })), /* @__PURE__ */ import_react.default.createElement("div", { className: "min-w-0 lg:col-span-7" }, /* @__PURE__ */ import_react.default.createElement(DevicesCard, { snap, onRenew: renew, sync: syncKey })), /* @__PURE__ */ import_react.default.createElement(DiagnosticsTerminal, { sim, devices: snap.devices })), /* @__PURE__ */ import_react.default.createElement("footer", { className: "fm-mono mt-6 flex flex-wrap justify-between gap-2 text-[11px] text-muted" }, /* @__PURE__ */ import_react.default.createElement("span", null, "FlowMonitor \xB7 dados simulados no navegador, nenhum equipamento real \xE9 consultado."), /* @__PURE__ */ import_react.default.createElement("span", null, "tick #", snap.tick, " \xB7 atualiza\xE7\xE3o 1 s"))), /* @__PURE__ */ import_react.default.createElement(BottomNav, null), /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-toasts", "aria-live": "polite" }, toasts.map((t) => /* @__PURE__ */ import_react.default.createElement(Toast, { key: t.id, t, onDismiss: dismissToast }))));
   }
 
   // simulador/main.jsx

@@ -1,0 +1,27 @@
+{
+  "name": "flowmonitor-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FlowMonitor empacotado como app Android (Capacitor), funcionando offline.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "6.2.1",
+    "@capacitor/core": "6.2.1",
+    "@fontsource/chakra-petch": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@fontsource/jetbrains-mono": "5.3.0",
+    "lucide-react": "0.460.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "recharts": "2.12.7"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "6.2.1",
+    "esbuild": "0.24.0",
+    "tailwindcss": "3.4.17"
+  }
+}

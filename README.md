@@ -30,7 +30,30 @@ A ponte (`live/flowmonitor.py`) usa só a biblioteca padrão do Python. Ela enco
 
 ## Rodar o simulador
 
-Abra `simulador/index.html` no navegador.
+Abra `simulador/index.html` no navegador. A versão 2 traz:
+
+- **Atualizar** no cabeçalho: nova leitura imediata de ping, tráfego e CPU e recarga da tabela de leases DHCP.
+- **Terminal de Diagnósticos**: ping (4 pacotes ICMP) e traceroute simulados, coerentes com o estado da rede: WAN em falha retorna `Net Unreachable`, IP do pool sem lease retorna `Host Unreachable`.
+- **Layout de celular**: navegação inferior, leases em cartões, faixa "Online · Conectado ao servidor" e áreas seguras de tela.
+
+## App Android (APK)
+
+Baixe no celular: **[FlowMonitor.apk](https://github.com/Rogerdev5690/flowmonitor/releases/download/apk-latest/FlowMonitor.apk)** (página da [release](https://github.com/Rogerdev5690/flowmonitor/releases/tag/apk-latest)).
+
+O APK é o simulador empacotado com [Capacitor](https://capacitorjs.com/) e funciona sem internet: React, Recharts, Tailwind e as fontes vão dentro do app. A cada push em `app/` ou `simulador/FlowMonitor.jsx`, o workflow `.github/workflows/android-apk.yml` compila um novo APK e substitui o arquivo da release `apk-latest`.
+
+Instalar: abra o link no Android, baixe, permita instalar apps da fonte (Chrome ou Arquivos) e, se o Play Protect avisar, toque em *Mais detalhes → Instalar mesmo assim*. O app é assinado com uma chave de debug fixa (`app/ci/debug.keystore`, senha `android`), então builds novos atualizam por cima do anterior. Não use essa chave para publicar na Play Store.
+
+Compilar na sua máquina (Node 20, JDK 17 e Android SDK 34):
+
+```bash
+cd app
+npm install
+npm run build          # gera app/www
+npx cap add android    # só na primeira vez
+npx cap sync android
+cd android && ./gradlew assembleDebug
+```
 
 ## Rodar a versão ao vivo (Windows)
 

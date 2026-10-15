@@ -1,0 +1,9 @@
+{
+  "appId": "io.github.rogerdev5690.flowmonitor",
+  "appName": "FlowMonitor",
+  "webDir": "www",
+  "backgroundColor": "#060b16",
+  "android": {
+    "backgroundColor": "#060b16"
+  }
+}

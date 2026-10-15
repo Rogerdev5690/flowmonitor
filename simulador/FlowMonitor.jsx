@@ -19,7 +19,8 @@ import {
   Activity, Globe, WifiOff, Pause, Play, Router, Cpu, MemoryStick, Thermometer,
   Clock, Smartphone, Laptop, Server, HardDrive, Tv, Speaker, Cctv, Cast, Printer,
   Lightbulb, RefreshCw, X, CircleCheck, Hourglass, CircleAlert, ArrowDown, ArrowUp,
-  Unplug, Zap, Terminal, Network, TriangleAlert, Timer,
+  Unplug, Zap, Terminal, Network, TriangleAlert, Timer, SquareTerminal, Route, Square,
+  Eraser, Wifi, CloudOff,
 } from "lucide-react";
 
 /* ─────────────────────────────── Tema ─────────────────────────────── */
@@ -132,9 +133,40 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
 .fm-scroll{scrollbar-width:thin;scrollbar-color:rgb(var(--line-2)) transparent}
 .fm-btn:focus-visible{outline:2px solid rgb(var(--electric));outline-offset:2px}
 
+/* Atualização manual */
+.fm-spin{animation:fm-spin .8s cubic-bezier(.4,0,.2,1)}
+@keyframes fm-spin{to{transform:rotate(360deg)}}
+.fm-sync-ring{position:absolute;inset:-1px;border-radius:12px;pointer-events:none;border:1px solid rgb(var(--electric));
+  box-shadow:0 0 26px -2px rgb(var(--electric) / .5), inset 0 0 18px -6px rgb(var(--electric) / .35);animation:fm-sync 1.1s ease-out forwards}
+@keyframes fm-sync{0%{opacity:1}100%{opacity:0}}
+
+/* Terminal de diagnóstico */
+.fm-term{background:#000;border:1px solid rgb(var(--neon) / .22);border-radius:10px;
+  box-shadow:inset 0 0 40px rgb(var(--neon) / .05), 0 0 24px -12px rgb(var(--neon) / .45)}
+.fm-term-out{color:rgb(var(--neon));text-shadow:0 0 6px rgb(var(--neon) / .35)}
+.fm-term-input{background:#000;color:rgb(var(--neon));caret-color:rgb(var(--neon));border:1px solid rgb(var(--neon) / .3)}
+.fm-term-input::placeholder{color:rgb(var(--neon) / .35)}
+.fm-term-input:focus{outline:none;border-color:rgb(var(--neon) / .8);box-shadow:0 0 0 3px rgb(var(--neon) / .15)}
+.fm-term-btn{background:#000;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;border:1px solid currentColor;transition:background .15s, box-shadow .15s}
+.fm-term-btn:hover:not(:disabled){background:rgb(var(--neon) / .08);box-shadow:0 0 16px -4px currentColor}
+.fm-term-btn:disabled{opacity:.35;cursor:not-allowed}
+.fm-cursor{display:inline-block;width:.6em;height:1.05em;vertical-align:-2px;background:rgb(var(--neon));animation:fm-blink 1s steps(2, jump-none) infinite}
+
+/* Navegação inferior (celular / APK) */
+.fm-anchor{scroll-margin-top:112px}
+.fm-bottomnav{position:fixed;z-index:50;left:0;right:0;bottom:0;
+  padding-bottom:env(safe-area-inset-bottom, 0px);
+  padding-left:max(8px, env(safe-area-inset-left, 0px));padding-right:max(8px, env(safe-area-inset-right, 0px));
+  background:rgb(var(--bg) / .92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-top:1px solid rgb(var(--line))}
+@media (max-width:767px){
+  .fm-main{padding-bottom:calc(88px + env(safe-area-inset-bottom, 0px))!important}
+  .fm-toasts{bottom:calc(80px + env(safe-area-inset-bottom, 0px))}
+}
+
 @media (prefers-reduced-motion: reduce){
   .fm-orb::before,.fm-orb::after,.fm-live.is-on::after,.fm-led.up.act,.fm-blink,.fm-led.fail,
-  .fm-row-in,.fm-row-out,.fm-bump,.fm-toast{animation:none!important}
+  .fm-row-in,.fm-row-out,.fm-bump,.fm-toast,.fm-spin,.fm-sync-ring,.fm-cursor{animation:none!important}
+  .fm-sync-ring{opacity:0}
   .fm-bar{transition:none}
 }
 `;
@@ -400,9 +432,9 @@ class NetworkSimulator {
     if (advanceUptime) this.uptimeSec += 1;
   }
 
-  stepWanHealth() {
+  stepWanHealth(countDowntime = true) {
     if (this.wanDown) {
-      this.sessionDown += 1;
+      if (countDowntime) this.sessionDown += 1;
       this.loss = 100;
       this.latency = null;
       return;
@@ -445,6 +477,26 @@ class NetworkSimulator {
     return events;
   }
 
+  /** Atualização manual: nova leitura de tráfego, CPU e ping + releitura da tabela de leases. */
+  refresh() {
+    this.stepTraffic(Date.now());
+    this.stepHardware(false);
+    this.stepWanHealth(false);
+    const purged = this.devices.filter((d) => d.status === "expired").length;
+    this.devices = this.devices.filter((d) => d.status !== "expired");
+    const bound = this.devices.length;
+    const expiring = this.devices.filter((d) => leaseState(d) === "expiring").length;
+    this.refreshedAt = Date.now();
+    this.addLog("system", "info", `manual refresh by noc: monitor-traffic, resource, netwatch ok (${this.wanDown ? "wan down" : `rtt ${this.latency.toFixed(1)}ms`})`);
+    this.addLog("dhcp", "info", `dhcp-lan lease table reloaded: ${bound} bound, ${expiring} expiring${purged ? `, ${purged} purged` : ""}`);
+    return { bound, expiring, purged };
+  }
+
+  /** Estado de um IP da LAN, usado pelo terminal de diagnóstico. */
+  lookupLan(ip) {
+    return this.devices.find((d) => d.ip === ip && d.status !== "expired") || null;
+  }
+
   snapshot() {
     const down = this.baseDown + this.sessionDown;
     return {
@@ -468,6 +520,7 @@ class NetworkSimulator {
       devices: this.devices,
       log: this.log,
       nextJoin: this.nextJoin,
+      refreshedAt: this.refreshedAt || null,
     };
   }
 }
@@ -537,55 +590,103 @@ function LiveClock() {
   );
 }
 
-function Header({ running, onToggle, wanDown }) {
+function useOnline() {
+  const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine !== false));
+  useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    return () => {
+      window.removeEventListener("online", up);
+      window.removeEventListener("offline", down);
+    };
+  }, []);
+  return online;
+}
+
+/** Faixa de conexão exibida só no celular, logo abaixo do cabeçalho. */
+function ConnectionStrip({ online, running, wanDown, lastSync }) {
+  const s = !online
+    ? { state: "var(--crit)", label: "Offline", text: "sem conexão com o servidor", tone: "text-crit" }
+    : !running
+      ? { state: "var(--warn)", label: "Pausado", text: "atualização automática suspensa", tone: "text-warn" }
+      : { state: "var(--neon)", label: "Online", text: "Conectado ao servidor", tone: "text-neon" };
+  return (
+    <div className="fm-gutter flex items-center justify-between gap-3 border-t border-line/70 py-1.5 md:hidden" role="status" aria-live="polite">
+      <span className="flex min-w-0 items-center gap-2 text-[11px]">
+        <span className={cx("fm-live flex-none", online && running && "is-on")} style={{ "--state": s.state }} />
+        <span className={cx("font-semibold", s.tone)}>{s.label}</span>
+        <span className="truncate text-ink-2">· {s.text}</span>
+        {wanDown && <span className="fm-mono flex-none rounded border border-crit/40 px-1 text-[9px] text-crit">WAN DOWN</span>}
+      </span>
+      <span className="fm-mono flex-none text-[10px] tabular-nums text-muted">sync {fmtClock(lastSync)}</span>
+    </div>
+  );
+}
+
+function Header({ running, onToggle, wanDown, onRefresh, refreshing, refreshCount, online, lastSync }) {
   return (
     <header className="fm-header sticky z-40 border-b border-line bg-bg/80 backdrop-blur-md">
-      <div className="fm-gutter mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 py-3">
-        <div className="flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-lg border border-electric/40 bg-electric/10 text-electric shadow-[0_0_22px_-4px_rgb(var(--electric)/.6)]">
+      <div className="fm-gutter mx-auto flex max-w-[1600px] items-center justify-between gap-3 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid h-10 w-10 flex-none place-items-center rounded-lg border border-electric/40 bg-electric/10 text-electric shadow-[0_0_22px_-4px_rgb(var(--electric)/.6)]">
             <Activity size={22} strokeWidth={2.2} />
           </span>
-          <div className="leading-tight">
-            <div className="font-display text-[22px] font-bold tracking-tight text-ink">
+          <div className="min-w-0 leading-tight">
+            <div className="font-display text-[20px] font-bold tracking-tight text-ink sm:text-[22px]">
               Flow<span className="text-electric">Monitor</span>
             </div>
             <div className="flex items-center gap-2">
               <span className={cx("fm-live", running && "is-on")}
                 style={{ "--state": running ? (wanDown ? "var(--crit)" : "var(--neon)") : "var(--warn)" }} />
-              <span className="fm-label text-[11px] text-ink-2">NOC Real-Time</span>
-              {!running && <StatePill tone="warn" icon={Pause}>Pausado</StatePill>}
+              <span className="fm-label whitespace-nowrap text-[11px] text-ink-2">NOC Real-Time</span>
+              {!running && <span className="hidden sm:inline"><StatePill tone="warn" icon={Pause}>Pausado</StatePill></span>}
             </div>
           </div>
+          <button type="button" onClick={onRefresh} disabled={refreshing}
+            aria-label="Atualizar agora: ping, tráfego, CPU e leases DHCP" title="Atualizar agora (ping, tráfego, CPU e leases DHCP)"
+            className="fm-btn ml-1 inline-flex h-10 min-w-10 flex-none items-center justify-center gap-2 rounded-md border border-line-2 bg-inset/70 px-2.5 text-[13px] font-semibold text-ink-2 transition hover:border-electric/60 hover:text-electric disabled:cursor-progress sm:px-3.5">
+            <RefreshCw key={refreshCount} size={16} className={cx(refreshing && "fm-spin text-electric")} />
+            <span className="hidden sm:inline">{refreshing ? "Atualizando…" : "Atualizar"}</span>
+          </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="hidden items-center gap-2 rounded-md border border-line bg-inset/70 px-3 py-1.5 md:flex">
+        <div className="flex flex-none items-center gap-2.5">
+          <div className="hidden items-center gap-2 rounded-md border border-line bg-inset/70 px-3 py-1.5 lg:flex">
             <Router size={14} className="text-muted" />
             <span className="fm-mono text-[12px] text-ink-2">FM-EDGE-01</span>
             <span className="fm-mono text-[11px] text-muted">10.10.10.1</span>
           </div>
           <LiveClock />
           <button type="button" onClick={onToggle} aria-pressed={!running}
+            aria-label={running ? "Pausar Simulação" : "Retomar Simulação"}
             className={cx(
-              "fm-btn inline-flex items-center gap-2 rounded-md border px-3.5 py-2 text-[13px] font-semibold transition",
+              "fm-btn inline-flex h-10 min-w-10 items-center justify-center gap-2 rounded-md border px-2.5 text-[13px] font-semibold transition sm:px-3.5",
               running
                 ? "border-electric/50 bg-electric/10 text-electric hover:bg-electric/20 hover:shadow-[0_0_18px_-4px_rgb(var(--electric)/.7)]"
                 : "border-neon/50 bg-neon/10 text-neon hover:bg-neon/20 hover:shadow-[0_0_18px_-4px_rgb(var(--neon)/.7)]"
             )}>
-            {running ? <Pause size={15} /> : <Play size={15} />}
-            {running ? "Pausar Simulação" : "Retomar Simulação"}
+            {running ? <Pause size={16} /> : <Play size={16} />}
+            <span className="hidden sm:inline">{running ? "Pausar Simulação" : "Retomar Simulação"}</span>
           </button>
         </div>
       </div>
+      <ConnectionStrip online={online} running={running} wanDown={wanDown} lastSync={lastSync} />
     </header>
   );
+}
+
+/** Contorno que pisca nos cards quando a atualização manual roda. */
+function SyncRing({ k }) {
+  return k > 0 ? <span key={k} aria-hidden="true" className="fm-sync-ring" /> : null;
 }
 
 /* ─────────────────────── Card 1 · Status geral ─────────────────────── */
 
 const AVAIL_HISTORY = Array.from({ length: 47 }, (_, i) => (i === 29 ? "down" : i === 12 ? "degraded" : "up"));
 
-function StatusCard({ snap, running, onToggleFailure, activeCount }) {
+function StatusCard({ snap, running, onToggleFailure, activeCount, sync }) {
   const down = snap.wanDown;
   const state = down ? "var(--crit)" : "var(--neon)";
   const current = down ? "down" : snap.sessionDown > 0 ? "degraded" : "up";
@@ -605,7 +706,8 @@ function StatusCard({ snap, running, onToggleFailure, activeCount }) {
   ];
 
   return (
-    <section className="fm-card flex flex-col gap-5 p-5 lg:col-span-4" aria-labelledby="status-title">
+    <section id="status" className="fm-card fm-anchor flex flex-col gap-5 p-5 lg:col-span-4" aria-labelledby="status-title">
+      <SyncRing k={sync} />
       <CardHeader icon={Network} title={<span id="status-title">Status geral da rede</span>}
         subtitle="netwatch · wan sfp-sfpplus1 → 8.8.8.8"
         right={down
@@ -778,10 +880,11 @@ function TrafficPanel({ id, title, iface, note, data, max, ticks, capacity, down
   );
 }
 
-function TrafficCard({ snap }) {
+function TrafficCard({ snap, sync }) {
   const total = snap.tr.wanIn + snap.tr.wanOut;
   return (
-    <section className="fm-card flex min-w-0 flex-col gap-4 p-5 lg:col-span-8" aria-labelledby="traffic-title">
+    <section id="trafego" className="fm-card fm-anchor flex min-w-0 flex-col gap-4 p-5 lg:col-span-8" aria-labelledby="traffic-title">
+      <SyncRing k={sync} />
       <CardHeader icon={Activity} title={<span id="traffic-title">Tráfego de dados em tempo real</span>}
         subtitle="janela 60 s · amostragem 1 s · /interface monitor-traffic"
         right={
@@ -841,7 +944,7 @@ function Faceplate({ ports, selected, onSelect }) {
   );
 }
 
-function EquipmentCard({ snap }) {
+function EquipmentCard({ snap, sync }) {
   const [selected, setSelected] = useState("sfp-sfpplus1");
   const ports = useMemo(
     () => PORTS.map((p) => (p.wan ? { ...p, up: !snap.wanDown } : p)),
@@ -869,7 +972,8 @@ function EquipmentCard({ snap }) {
   );
 
   return (
-    <section className="fm-card flex flex-col gap-4 p-5" aria-labelledby="equip-title">
+    <section id="equipamento" className="fm-card fm-anchor flex flex-col gap-4 p-5" aria-labelledby="equip-title">
+      <SyncRing k={sync} />
       <CardHeader icon={Router} title={<span id="equip-title">Equipamento ativo</span>}
         subtitle="FM-EDGE-01 · roteador de borda"
         right={<StatePill tone="neon" icon={CircleCheck}>Online</StatePill>} />
@@ -967,7 +1071,7 @@ function LogCard({ log }) {
   }, [log]);
   const tone = { info: "text-electric", warning: "text-warn", critical: "text-crit" };
   return (
-    <section className="fm-card flex flex-col gap-3 p-5" aria-labelledby="log-title">
+    <section id="log" className="fm-card fm-anchor flex flex-col gap-3 p-5" aria-labelledby="log-title">
       <CardHeader icon={Terminal} title={<span id="log-title">Log do sistema</span>} subtitle="/log print follow" />
       <div ref={ref} onScroll={(e) => {
         const el = e.currentTarget;
@@ -1054,7 +1158,46 @@ function DeviceRow({ d, isNew, onRenew }) {
   );
 }
 
-function DevicesCard({ snap, onRenew }) {
+/** Versão em cartão da linha da tabela, usada no celular. */
+function DeviceCard({ d, isNew, onRenew }) {
+  const cat = CATS[d.cat];
+  const Icon = ICONS[d.icon] || Smartphone;
+  const st = leaseState(d);
+  const pct = d.lease ? (d.remaining / d.lease) * 100 : 0;
+  const bar = { active: "bg-neon", expiring: "bg-warn", expired: "bg-crit" }[st];
+  return (
+    <li className={cx("rounded-lg border border-line bg-inset/50 p-3", isNew && "fm-row-in", st === "expired" && "fm-row-out")}>
+      <div className="flex items-center gap-3">
+        <span className="grid h-9 w-9 flex-none place-items-center rounded-md border border-line-2 bg-inset" style={{ color: cat.color }}>
+          <Icon size={16} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[14px] font-medium text-ink">{d.name}</div>
+          <div className="fm-mono truncate text-[11px] text-muted">{d.ip} · {cat.label}</div>
+        </div>
+        {st === "active" && <StatePill tone="neon" icon={CircleCheck}>Ativo</StatePill>}
+        {st === "expiring" && <StatePill tone="warn" icon={Hourglass}>Expirando</StatePill>}
+        {st === "expired" && <StatePill tone="crit" icon={CircleAlert}>Expirado</StatePill>}
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-line" role="progressbar"
+          aria-label={`Lease restante de ${d.name}`} aria-valuenow={d.remaining} aria-valuemin={0} aria-valuemax={d.lease}>
+          <div className={cx("fm-bar h-full rounded-full", bar)} style={{ width: `${pct}%` }} />
+        </div>
+        <span className={cx("fm-mono w-11 text-right text-[13px] font-semibold tabular-nums",
+          st === "expiring" ? "text-warn" : st === "expired" ? "text-crit" : "text-ink")}>{fmtMMSS(d.remaining)}</span>
+        <button type="button" onClick={() => onRenew(d.id)} disabled={st === "expired"}
+          aria-label={`Renovar lease de ${d.name}`}
+          className="fm-btn grid h-10 w-10 flex-none place-items-center rounded-md border border-line-2 text-ink-2 transition hover:border-electric/60 hover:text-electric disabled:opacity-30">
+          <RefreshCw size={15} />
+        </button>
+      </div>
+      <div className="fm-mono mt-1.5 truncate text-[10px] text-muted">{d.mac} · lease {fmtMMSS(d.lease)}</div>
+    </li>
+  );
+}
+
+function DevicesCard({ snap, onRenew, sync }) {
   const live = snap.devices.filter((d) => d.status !== "expired");
   const total = live.length;
   const expiring = live.filter((d) => leaseState(d) === "expiring").length;
@@ -1062,10 +1205,11 @@ function DevicesCard({ snap, onRenew }) {
   const rows = [...snap.devices].sort((a, b) => a.remaining - b.remaining || a.id - b.id);
 
   return (
-    <section className="fm-card flex min-w-0 flex-col gap-4 p-5" aria-labelledby="dev-title">
+    <section id="dispositivos" className="fm-card fm-anchor flex min-w-0 flex-col gap-4 p-5" aria-labelledby="dev-title">
+      <SyncRing k={sync} />
       <CardHeader icon={Smartphone} title={<span id="dev-title">Dispositivos conectados</span>}
         subtitle="dhcp-lan · pool 10.10.20.100–250 · /ip dhcp-server lease"
-        right={<StatePill tone="electric" icon={Timer}>próxima concessão em ~{Math.max(snap.nextJoin, 0)} s</StatePill>} />
+        right={<StatePill tone="electric" icon={Timer}>próxima concessão ~{Math.max(snap.nextJoin, 0)} s</StatePill>} />
 
       <div className="grid grid-cols-1 items-center gap-5 md:grid-cols-[220px_1fr]">
         <div className="relative mx-auto h-[200px] w-[200px]">
@@ -1117,7 +1261,18 @@ function DevicesCard({ snap, onRenew }) {
         </div>
       </div>
 
-      <div className="fm-scroll max-h-[440px] min-w-0 overflow-auto rounded-lg border border-line">
+      <ul className="flex flex-col gap-2 md:hidden" aria-label="Leases DHCP ativos, ordenados pelo tempo restante">
+        {rows.length === 0 && (
+          <li className="rounded-lg border border-dashed border-line-2 px-4 py-8 text-center text-[13px] text-muted">
+            Nenhum lease ativo. Aguardando novas concessões DHCP…
+          </li>
+        )}
+        {rows.map((d) => (
+          <DeviceCard key={d.id} d={d} isNew={snap.tick - d.joinedTick < 3} onRenew={onRenew} />
+        ))}
+      </ul>
+
+      <div className="fm-scroll hidden max-h-[440px] min-w-0 overflow-auto rounded-lg border border-line md:block">
         <table className="w-full min-w-[620px] border-collapse text-left">
           <caption className="sr-only">Leases DHCP ativos, ordenados pelo tempo restante</caption>
           <thead className="sticky top-0 z-10 bg-inset">
@@ -1145,6 +1300,487 @@ function DevicesCard({ snap, onRenew }) {
         Leases encurtados (45 s a 4 min) para o ciclo ficar visível. Ao zerar, o IP é liberado e o dispositivo sai da lista.
       </p>
     </section>
+  );
+}
+
+/* ───────────────────── Terminal de Diagnósticos ───────────────────── */
+// Ping e traceroute simulados, coerentes com o estado da rede: latência da WAN,
+// falha simulada no link e leases DHCP ativos (um IP sem lease não responde).
+
+const NOC_SRC = { name: "noc-ws", ip: "10.10.20.10" };
+const GW = { name: "fm-edge-01.lan", ip: "10.10.20.1" };
+const ISP_HOPS = [{ ip: "203.0.113.1", rtt: 1.6 }, { ip: "198.51.100.17", rtt: 3.4 }];
+
+const KNOWN_HOSTS = {
+  "google.com": "142.250.79.46", "www.google.com": "142.250.79.68", "dns.google": "8.8.8.8",
+  "cloudflare.com": "104.16.132.229", "one.one.one.one": "1.1.1.1", "github.com": "140.82.112.4",
+  "mikrotik.com": "159.148.147.196", "registro.br": "200.160.2.3",
+  localhost: "127.0.0.1", gateway: GW.ip, "fm-edge-01": GW.ip, "fm-edge-01.lan": GW.ip, "noc-ws": NOC_SRC.ip,
+};
+
+// Atraso extra além da latência da WAN, TTL de chegada e número de saltos de destinos conhecidos.
+const KNOWN_PROFILES = [
+  ["8.8.", { extra: 0, ttl: 117, hops: 7 }],
+  ["142.250.", { extra: 0.6, ttl: 117, hops: 7 }],
+  ["1.1.1.", { extra: 1, ttl: 57, hops: 6 }],
+  ["1.0.0.", { extra: 1, ttl: 57, hops: 6 }],
+  ["104.16.", { extra: 1.4, ttl: 57, hops: 6 }],
+  ["200.160.", { extra: 19, ttl: 56, hops: 8 }],
+  ["140.82.", { extra: 126, ttl: 49, hops: 13 }],
+  ["159.148.", { extra: 208, ttl: 51, hops: 14 }],
+];
+
+const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+const PUBLIC_FIRST_OCTETS = [23, 34, 45, 52, 64, 104, 151, 177, 185, 186, 187, 189, 191, 199, 200, 201];
+
+const hashStr = (str) => {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+};
+const gauss = () => (Math.random() + Math.random() + Math.random() - 1.5) / 1.5;
+const fmtRtt = (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v >= 1 ? v.toFixed(2) : v.toFixed(3));
+const ms3 = (v) => `${v.toFixed(3)} ms`;
+
+function resolveHost(raw) {
+  const q = raw.trim().toLowerCase();
+  if (!q) return { error: "empty" };
+  const m = q.match(IPV4_RE);
+  if (m) {
+    if (m.slice(1).some((n) => Number(n) > 255)) return { error: "unknown" };
+    return { host: q, ip: q, isIp: true };
+  }
+  if (!HOST_RE.test(q)) return { error: "unknown" };
+  if (KNOWN_HOSTS[q]) return { host: q, ip: KNOWN_HOSTS[q] };
+  if (!q.includes(".")) return { error: "unknown" };
+  const h = hashStr(q);
+  const first = PUBLIC_FIRST_OCTETS[h % PUBLIC_FIRST_OCTETS.length];
+  return { host: q, ip: `${first}.${(h >>> 8) & 255}.${(h >>> 16) & 255}.${((h >>> 24) & 253) + 1}` };
+}
+
+function profileFor(ip) {
+  const known = KNOWN_PROFILES.find(([prefix]) => ip.startsWith(prefix));
+  if (known) return known[1];
+  const h = hashStr(ip);
+  const band = h % 3; // 0 Brasil · 1 América do Sul · 2 EUA/Europa
+  const hops = band === 0 ? 7 + ((h >>> 8) % 2) : band === 1 ? 9 + ((h >>> 8) % 2) : 11 + ((h >>> 8) % 3);
+  const extra = band === 0 ? 2 + ((h >>> 4) % 9) : band === 1 ? 28 + ((h >>> 4) % 25) : 115 + ((h >>> 4) % 80);
+  return { extra, hops, ttl: ((h >>> 12) % 2 ? 64 : 128) - hops + 1 };
+}
+
+function classifyTarget(ip, sim) {
+  const [a, b, c] = ip.split(".").map(Number);
+  if (a === 127) return { kind: "loopback" };
+  if (ip === NOC_SRC.ip) return { kind: "self" };
+  if (ip === GW.ip || ip === "10.10.10.1") return { kind: "gateway" };
+  if (a === 10 && b === 10 && c === 20) {
+    const dev = sim.lookupLan(ip);
+    return dev ? { kind: "lan", dev } : { kind: "lan-miss" };
+  }
+  if (a === 0 || a >= 224) return { kind: "invalid" };
+  if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)) {
+    return { kind: "private" };
+  }
+  return { kind: "public", prof: profileFor(ip) };
+}
+
+const wanRtt = (sim) => (typeof sim.latency === "number" ? sim.latency : 12);
+
+function sampleRtt(cls, sim) {
+  switch (cls.kind) {
+    case "loopback":
+    case "self": return rand(0.025, 0.07);
+    case "gateway": return rand(0.18, 0.55);
+    case "lan": {
+      const cat = cls.dev.cat;
+      if (cat === "server") return rand(0.25, 0.8);
+      if (cat === "laptop") return rand(1.8, 9);
+      return Math.random() < 0.2 ? rand(25, 90) : rand(3, 18); // celulares e IoT em economia de energia
+    }
+    default: return Math.max(0.6, wanRtt(sim) + cls.prof.extra + gauss() * Math.max(0.6, sim.jitter || 1));
+  }
+}
+
+const ttlFor = (cls) => (cls.kind === "public" ? cls.prof.ttl : cls.kind === "lan" && cls.dev.cat === "laptop" ? 128 : 64);
+
+function lossFor(cls, sim) {
+  if (cls.kind === "public") return (sim.loss || 0) / 100 + 0.004;
+  if (cls.kind === "lan" && (cls.dev.cat === "mobile" || cls.dev.cat === "iot")) return 0.03;
+  return 0;
+}
+
+let termSeq = 0;
+const L = (kind, text) => ({ id: ++termSeq, kind, text });
+
+function planPing(res, cls, sim) {
+  const from = res.isIp ? res.ip : `${res.host} (${res.ip})`;
+  const head = [L("out", `PING ${res.host} (${res.ip}) 56(84) bytes of data.`)];
+  const packets = [];
+  for (let seq = 1; seq <= 4; seq++) {
+    const pk = { seq, ok: false, err: false, rtt: null };
+    if (sim.wanDown && (cls.kind === "public" || cls.kind === "private")) {
+      pk.err = true;
+      pk.line = L("err", `From ${GW.ip} icmp_seq=${seq} Destination Net Unreachable`);
+    } else if (cls.kind === "lan-miss") {
+      pk.err = true;
+      pk.line = L("err", `From ${NOC_SRC.ip} icmp_seq=${seq} Destination Host Unreachable`);
+    } else if (cls.kind === "private" || Math.random() < lossFor(cls, sim)) {
+      pk.line = L("dim", `no answer yet for icmp_seq=${seq}`);
+    } else {
+      pk.ok = true;
+      pk.rtt = sampleRtt(cls, sim);
+      pk.line = L("out", `64 bytes from ${from}: icmp_seq=${seq} ttl=${ttlFor(cls)} time=${fmtRtt(pk.rtt)} ms`);
+    }
+    packets.push(pk);
+  }
+  return { head, packets };
+}
+
+function pingStats(res, sent) {
+  const tx = sent.length;
+  const ok = sent.filter((p) => p.ok);
+  const errs = sent.filter((p) => p.err).length;
+  const loss = tx ? Math.round((100 * (tx - ok.length)) / tx) : 0;
+  const time = Math.max(0, (tx - 1) * 1000 + randInt(2, 9));
+  const lines = [
+    L("blank", ""),
+    L("stat", `--- ${res.host} ping statistics ---`),
+    L(loss === 100 ? "err" : "stat", `${tx} packets transmitted, ${ok.length} received${errs ? `, +${errs} errors` : ""}, ${loss}% packet loss, time ${time}ms`),
+  ];
+  if (ok.length) {
+    const r = ok.map((p) => p.rtt);
+    const mean = r.reduce((s, v) => s + v, 0) / r.length;
+    const mdev = Math.sqrt(r.reduce((s, v) => s + (v - mean) ** 2, 0) / r.length);
+    lines.push(L("stat", `rtt min/avg/max/mdev = ${Math.min(...r).toFixed(3)}/${mean.toFixed(3)}/${Math.max(...r).toFixed(3)}/${mdev.toFixed(3)} ms`));
+  }
+  return lines;
+}
+
+const hopLine = (n, name, ip, rtts, flag = "") =>
+  `${String(n).padStart(2, " ")}  ${name} (${ip})  ${rtts.map((t) => `${ms3(t)}${flag}`).join("  ")}`;
+const three = (base, spread) => [0, 1, 2].map(() => Math.max(0.05, base + gauss() * spread));
+
+function planTrace(res, cls, sim) {
+  const head = [L("out", `traceroute to ${res.host} (${res.ip}), 30 hops max, 60 byte packets`)];
+  const hops = [];
+  const add = (line, delay = rand(260, 600)) => hops.push({ delay, line });
+  const destName = res.isIp ? res.ip : res.host;
+
+  if (cls.kind === "loopback" || cls.kind === "self") {
+    add(L("out", hopLine(1, cls.kind === "self" ? NOC_SRC.name : "localhost", res.ip, three(0.03, 0.01))));
+  } else if (cls.kind === "gateway") {
+    add(L("out", hopLine(1, GW.name, res.ip, three(0.4, 0.08))));
+  } else if (cls.kind === "lan") {
+    add(L("out", hopLine(1, destName, res.ip, three(sampleRtt(cls, sim), 0.6))));
+  } else if (cls.kind === "lan-miss") {
+    add(L("err", hopLine(1, NOC_SRC.name, NOC_SRC.ip, three(3006, 0.6), " !H")), 3000);
+  } else if (sim.wanDown) {
+    add(L("err", hopLine(1, GW.name, GW.ip, three(0.4, 0.08), " !N")));
+  } else if (cls.kind === "private") {
+    add(L("out", hopLine(1, GW.name, GW.ip, three(0.4, 0.08))));
+    add(L("out", hopLine(2, ISP_HOPS[0].ip, ISP_HOPS[0].ip, three(ISP_HOPS[0].rtt, 0.3))));
+    for (let n = 3; n <= 6; n++) add(L("dim", `${String(n).padStart(2, " ")}  * * *`), 1100);
+    hops.push({ delay: 200, line: L("dim", "(sem resposta após 6 saltos: endereço privado fora desta rede)") });
+  } else {
+    const { hops: total, extra } = cls.prof;
+    const h = hashStr(res.ip);
+    const dest = wanRtt(sim) + extra;
+    const [a, b] = res.ip.split(".").map(Number);
+    const transit = extra > 100 ? [4, 62, 80, 129, 154] : [177, 187, 189, 200, 201];
+    const silent = total > 7 ? 4 + (h % 3) : -1;
+    add(L("out", hopLine(1, GW.name, GW.ip, three(0.4, 0.08))));
+    ISP_HOPS.forEach((hop, i) => add(L("out", hopLine(i + 2, hop.ip, hop.ip, three(hop.rtt + wanRtt(sim) * 0.08, 0.3)))));
+    for (let n = 4; n < total; n++) {
+      if (n === silent) {
+        add(L("dim", `${String(n).padStart(2, " ")}  * * *`), 1100);
+        continue;
+      }
+      const near = n >= total - 2;
+      const ip = near
+        ? `${a}.${b}.${(h >>> n) & 255}.${((h >>> (n + 3)) & 253) + 1}`
+        : `${transit[(h + n) % transit.length]}.${(h >>> (n * 2)) & 255}.${(h >>> (n * 3)) & 255}.${((h >>> n) & 253) + 1}`;
+      const base = 3.4 + (dest - 3.4) * ((n - 3) / (total - 3));
+      add(L("out", hopLine(n, ip, ip, three(base, Math.max(0.4, base * 0.04)))));
+    }
+    add(L("out", hopLine(total, destName, res.ip, three(dest, Math.max(0.4, dest * 0.03)))));
+  }
+  return { head, hops };
+}
+
+const QUICK_TARGETS = ["8.8.8.8", "1.1.1.1", "google.com", "gateway"];
+
+function TermLine({ l }) {
+  if (l.kind === "cmd") {
+    return (
+      <div className="[overflow-wrap:anywhere]">
+        <span className="text-electric">noc@{NOC_SRC.name}</span>
+        <span className="text-ink-2">:</span><span className="text-electric">~</span><span className="text-ink-2">$ </span>
+        <span className="text-ink [text-shadow:none]">{l.text}</span>
+      </div>
+    );
+  }
+  const tone = {
+    out: "", stat: "font-semibold", info: "text-electric", ctrl: "text-ink",
+    err: "text-crit [text-shadow:none]", dim: "opacity-60", blank: "",
+  }[l.kind];
+  return <div className={cx("whitespace-pre-wrap [overflow-wrap:anywhere]", tone)}>{l.text || " "}</div>;
+}
+
+function DiagnosticsTerminal({ sim, devices }) {
+  const [host, setHost] = useState("8.8.8.8");
+  const [error, setError] = useState("");
+  const [running, setRunning] = useState(null);
+  const [lines, setLines] = useState(() => [
+    L("info", "FlowMonitor diag shell · origem noc-ws (10.10.20.10) · gateway FM-EDGE-01 (10.10.20.1)"),
+    L("dim", "Digite um host ou IP e escolha Ping ou Tracert. As respostas são simuladas a partir do estado da rede."),
+    L("blank", ""),
+  ]);
+  const job = useRef(0);
+  const timers = useRef([]);
+  const runningRef = useRef(null);
+  const progress = useRef(null);
+  const outRef = useRef(null);
+  const stick = useRef(true);
+  const inputRef = useRef(null);
+
+  const push = useCallback((...ls) => setLines((prev) => [...prev, ...ls].slice(-400)), []);
+  const clearTimers = () => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+  };
+  const later = (fn, ms) => timers.current.push(setTimeout(fn, ms));
+  useEffect(() => () => clearTimers(), []);
+  useEffect(() => {
+    const el = outRef.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [lines, running]);
+
+  const finish = () => {
+    runningRef.current = null;
+    progress.current = null;
+    setRunning(null);
+  };
+
+  const start = (kind) => {
+    if (runningRef.current) return;
+    const raw = host.trim();
+    const res = resolveHost(raw);
+    if (res.error === "empty") {
+      setError("Digite um host ou endereço IP de destino.");
+      inputRef.current?.focus();
+      return;
+    }
+    setError("");
+    stick.current = true;
+    push(L("cmd", kind === "ping" ? `ping -c 4 -O ${raw}` : `traceroute ${raw}`));
+    if (res.error) {
+      push(...(kind === "ping"
+        ? [L("err", `ping: ${raw}: Name or service not known`)]
+        : [L("err", `${raw}: Name or service not known`), L("err", `Cannot handle "host" cmdline arg \`${raw}' on position 1 (argc 1)`)]),
+      L("blank", ""));
+      return;
+    }
+    const cls = classifyTarget(res.ip, sim);
+    if (cls.kind === "invalid") {
+      push(L("err", kind === "ping" ? "ping: connect: Invalid argument" : `${raw}: Invalid argument`), L("blank", ""));
+      return;
+    }
+    const my = ++job.current;
+    runningRef.current = kind;
+    setRunning(kind);
+
+    if (kind === "ping") {
+      const plan = planPing(res, cls, sim);
+      push(...plan.head);
+      progress.current = { kind, res, sent: [] };
+      plan.packets.forEach((pk, i) => later(() => {
+        if (job.current !== my) return;
+        progress.current.sent.push(pk);
+        push(pk.line);
+        if (i === plan.packets.length - 1) {
+          later(() => {
+            if (job.current !== my) return;
+            push(...pingStats(res, progress.current.sent), L("blank", ""));
+            finish();
+          }, 260);
+        }
+      }, 320 + i * 1000));
+    } else {
+      const plan = planTrace(res, cls, sim);
+      push(...plan.head);
+      progress.current = { kind, res };
+      let t = 0;
+      plan.hops.forEach((hop, i) => {
+        t += hop.delay;
+        later(() => {
+          if (job.current !== my) return;
+          push(hop.line);
+          if (i === plan.hops.length - 1) {
+            push(L("blank", ""));
+            finish();
+          }
+        }, t);
+      });
+    }
+  };
+
+  const stop = () => {
+    if (!runningRef.current) return;
+    job.current++;
+    clearTimers();
+    const p = progress.current;
+    push(L("ctrl", "^C"));
+    if (p && p.kind === "ping") push(...pingStats(p.res, p.sent));
+    push(L("blank", ""));
+    finish();
+  };
+
+  const clear = () => {
+    if (runningRef.current) return;
+    setLines([L("dim", "Terminal limpo."), L("blank", "")]);
+  };
+
+  const lanTarget = useMemo(() => {
+    const live = devices.filter((d) => d.status !== "expired");
+    return live.find((d) => d.cat === "server") || live[0] || null;
+  }, [devices]);
+
+  const chips = [...QUICK_TARGETS.map((t) => ({ value: t, label: t })), ...(lanTarget ? [{ value: lanTarget.ip, label: lanTarget.ip, title: `${lanTarget.name} (lease DHCP)` }] : [])];
+
+  return (
+    <section id="terminal" className="fm-card fm-anchor flex min-w-0 flex-col gap-4 p-5 lg:col-span-12" aria-labelledby="term-title">
+      <CardHeader icon={SquareTerminal} title={<span id="term-title">Terminal de Diagnósticos</span>}
+        subtitle="ICMP echo · traceroute UDP · origem noc-ws 10.10.20.10"
+        right={running
+          ? <StatePill tone="electric" icon={running === "ping" ? Activity : Route} blink>executando {running === "ping" ? "ping" : "traceroute"}</StatePill>
+          : <StatePill tone="muted" icon={SquareTerminal}>pronto</StatePill>} />
+
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <form className="flex min-w-0 flex-col gap-3" onSubmit={(e) => { e.preventDefault(); start("ping"); }} noValidate>
+          <label htmlFor="fm-term-host" className="fm-label text-[11px] text-ink-2">Host / IP de destino</label>
+          <input id="fm-term-host" ref={inputRef} value={host}
+            onChange={(e) => { setHost(e.target.value); if (error) setError(""); }}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && runningRef.current && !window.getSelection()?.toString()) {
+                e.preventDefault();
+                stop();
+              }
+            }}
+            placeholder="8.8.8.8 ou google.com" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
+            inputMode="url" enterKeyHint="go" aria-invalid={!!error} aria-describedby={error ? "fm-term-err" : undefined}
+            className="fm-term-input fm-mono h-11 w-full rounded-md px-3 text-[14px]" />
+          {error && <p id="fm-term-err" className="text-[12px] text-crit">{error}</p>}
+
+          <div className="flex flex-wrap gap-1.5" aria-label="Destinos rápidos">
+            {chips.map((c) => (
+              <button key={c.value} type="button" onClick={() => { setHost(c.value); setError(""); }} title={c.title || c.value}
+                className={cx("fm-btn fm-mono rounded border px-2 py-1 text-[11px] transition",
+                  host.trim().toLowerCase() === c.value ? "border-neon/60 text-neon" : "border-line-2 text-ink-2 hover:border-neon/40 hover:text-neon")}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <button type="submit" disabled={!!running} className="fm-btn fm-term-btn h-11 whitespace-nowrap rounded-md px-3 text-[13px] font-semibold text-neon">
+              [ Executar Ping ]
+            </button>
+            <button type="button" onClick={() => start("tracert")} disabled={!!running} className="fm-btn fm-term-btn h-11 whitespace-nowrap rounded-md px-3 text-[13px] font-semibold text-electric">
+              [ Executar Tracert ]
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={stop} disabled={!running}
+              className="fm-btn fm-term-btn inline-flex h-10 items-center justify-center gap-1.5 rounded-md text-[12px] text-crit">
+              <Square size={12} /> Parar (Ctrl+C)
+            </button>
+            <button type="button" onClick={clear} disabled={!!running}
+              className="fm-btn fm-term-btn inline-flex h-10 items-center justify-center gap-1.5 rounded-md text-[12px] text-ink-2">
+              <Eraser size={13} /> Limpar
+            </button>
+          </div>
+          <p className="text-[11px] leading-relaxed text-muted">
+            Com a WAN em falha, destinos externos retornam <span className="fm-mono">Net Unreachable</span>. Um IP do pool sem lease ativo retorna <span className="fm-mono">Host Unreachable</span>.
+          </p>
+        </form>
+
+        <div className="fm-term flex min-w-0 flex-col overflow-hidden">
+          <div className="flex items-center gap-2 border-b border-neon/15 px-3 py-2">
+            <span className="h-2.5 w-2.5 rounded-full bg-crit/80" />
+            <span className="h-2.5 w-2.5 rounded-full bg-warn/80" />
+            <span className="h-2.5 w-2.5 rounded-full bg-neon/80" />
+            <span className="fm-mono ml-2 truncate text-[11px] text-ink-2">noc@noc-ws: ~ · bash</span>
+          </div>
+          <div ref={outRef}
+            onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24; }}
+            onClick={() => inputRef.current?.focus({ preventScroll: true })}
+            className="fm-scroll fm-mono fm-term-out h-[300px] overflow-auto px-3 py-2.5 text-[11px] leading-[1.65] sm:h-[360px] sm:text-[12.5px]"
+            role="log" aria-live="polite" aria-label="Saída do terminal">
+            {lines.map((l) => <TermLine key={l.id} l={l} />)}
+            {running
+              ? <div><span className="fm-cursor" aria-hidden="true" /></div>
+              : (
+                <div>
+                  <span className="text-electric">noc@noc-ws</span><span className="text-ink-2">:</span><span className="text-electric">~</span>
+                  <span className="text-ink-2">$ </span><span className="fm-cursor" aria-hidden="true" />
+                </div>
+              )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ─────────────────────── Navegação inferior (celular) ─────────────────────── */
+
+const NAV_ITEMS = [
+  { id: "status", label: "Status", Icon: Network },
+  { id: "trafego", label: "Tráfego", Icon: Activity },
+  { id: "equipamento", label: "Ativo", Icon: Router },
+  { id: "dispositivos", label: "Leases", Icon: Smartphone },
+  { id: "terminal", label: "Terminal", Icon: SquareTerminal },
+];
+
+function BottomNav() {
+  const [active, setActive] = useState("status");
+  useEffect(() => {
+    if (typeof window === "undefined" || !("IntersectionObserver" in window)) return undefined;
+    const els = NAV_ITEMS.map((n) => document.getElementById(n.id)).filter(Boolean);
+    const io = new IntersectionObserver((entries) => {
+      const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (vis[0]) setActive(vis[0].target.id);
+    }, { rootMargin: "-110px 0px -55% 0px", threshold: 0 });
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, []);
+  const go = (id) => {
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document.getElementById(id)?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    setActive(id);
+  };
+  return (
+    <nav className="fm-bottomnav md:hidden" aria-label="Seções do painel">
+      <ul className="grid grid-cols-5">
+        {NAV_ITEMS.map((n) => {
+          const on = active === n.id;
+          return (
+            <li key={n.id}>
+              <button type="button" onClick={() => go(n.id)} aria-current={on ? "true" : undefined}
+                className={cx("fm-btn relative flex h-14 w-full flex-col items-center justify-center gap-1 transition", on ? "text-electric" : "text-muted hover:text-ink-2")}>
+                <span className={cx("absolute top-0 h-0.5 w-8 rounded-full transition", on ? "bg-electric shadow-[0_0_10px_rgb(var(--electric))]" : "bg-transparent")} />
+                <n.Icon size={19} strokeWidth={on ? 2.3 : 2} />
+                <span className="fm-label text-[9.5px] leading-none">{n.label}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
   );
 }
 
@@ -1194,6 +1830,10 @@ export default function FlowMonitor() {
   const [snap, setSnap] = useState(() => sim.snapshot());
   const [running, setRunning] = useState(true);
   const [toasts, setToasts] = useState([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [syncKey, setSyncKey] = useState(0);
+  const refreshingRef = useRef(false);
+  const online = useOnline();
 
   const pushToast = useCallback((t) => {
     const id = ++toastSeq;
@@ -1234,24 +1874,46 @@ export default function FlowMonitor() {
     setSnap(sim.snapshot());
   }, [sim]);
 
+  // Atualização manual: força nova leitura (ping, tráfego, CPU) e recarrega a tabela de leases.
+  const refresh = useCallback(() => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    const r = sim.refresh();
+    const s = sim.snapshot();
+    setSnap(s);
+    setSyncKey((k) => k + 1);
+    pushToast({
+      tone: "ok", icon: RefreshCw, title: "Métricas atualizadas",
+      body: `${s.wanDown ? "WAN sem resposta" : `ping ${nf(s.latency, 1)} ms`} · CPU ${nf(s.cpu, 0)}% · ${fmtRate(s.tr.wanIn)} ↓`,
+      meta: `${r.bound} leases ativos · ${r.expiring} expirando${r.purged ? ` · ${r.purged} removidos` : ""}`,
+    });
+    setTimeout(() => {
+      refreshingRef.current = false;
+      setRefreshing(false);
+    }, 800);
+  }, [sim, pushToast]);
+
   const activeCount = snap.devices.filter((d) => d.status !== "expired").length;
 
   return (
     <div className="fm-app text-ink">
       <style>{GLOBAL_CSS}</style>
-      <Header running={running} onToggle={() => setRunning((r) => !r)} wanDown={snap.wanDown} />
+      <Header running={running} onToggle={() => setRunning((r) => !r)} wanDown={snap.wanDown}
+        onRefresh={refresh} refreshing={refreshing} refreshCount={syncKey} online={online} lastSync={snap.now} />
 
-      <main className="fm-gutter mx-auto max-w-[1600px]" style={{ paddingBlock: 20 }}>
+      <main className="fm-main fm-gutter mx-auto max-w-[1600px]" style={{ paddingBlock: 20 }}>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-          <StatusCard snap={snap} running={running} onToggleFailure={toggleFailure} activeCount={activeCount} />
-          <TrafficCard snap={snap} />
+          <StatusCard snap={snap} running={running} onToggleFailure={toggleFailure} activeCount={activeCount} sync={syncKey} />
+          <TrafficCard snap={snap} sync={syncKey} />
           <div className="flex min-w-0 flex-col gap-4 lg:col-span-5">
-            <EquipmentCard snap={snap} />
+            <EquipmentCard snap={snap} sync={syncKey} />
             <LogCard log={snap.log} />
           </div>
           <div className="min-w-0 lg:col-span-7">
-            <DevicesCard snap={snap} onRenew={renew} />
+            <DevicesCard snap={snap} onRenew={renew} sync={syncKey} />
           </div>
+          <DiagnosticsTerminal sim={sim} devices={snap.devices} />
         </div>
         <footer className="fm-mono mt-6 flex flex-wrap justify-between gap-2 text-[11px] text-muted">
           <span>FlowMonitor · dados simulados no navegador, nenhum equipamento real é consultado.</span>
@@ -1259,6 +1921,7 @@ export default function FlowMonitor() {
         </footer>
       </main>
 
+      <BottomNav />
       <div className="fm-toasts" aria-live="polite">
         {toasts.map((t) => <Toast key={t.id} t={t} onDismiss={dismissToast} />)}
       </div>
