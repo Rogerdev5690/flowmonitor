@@ -1,5 +1,5 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import FlowMonitor from "../../simulador/FlowMonitor.jsx";
+import AppShell from "./AppShell.jsx";
 
-createRoot(document.getElementById("root")).render(<FlowMonitor />);
+createRoot(document.getElementById("root")).render(<AppShell />);

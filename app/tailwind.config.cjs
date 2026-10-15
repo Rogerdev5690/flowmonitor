@@ -1,5 +1,5 @@
 module.exports = {
-  content: ["../simulador/FlowMonitor.jsx"],
+  content: ["../simulador/FlowMonitor.jsx", "../live/src/FlowMonitorLive.jsx", "./src/**/*.jsx"],
   theme: {
     extend: {
       colors: {

@@ -40,7 +40,22 @@ Abra `simulador/index.html` no navegador. A versão 2 traz:
 
 Baixe no celular: **[FlowMonitor.apk](https://github.com/Rogerdev5690/flowmonitor/releases/download/apk-latest/FlowMonitor.apk)** (página da [release](https://github.com/Rogerdev5690/flowmonitor/releases/tag/apk-latest)).
 
-O APK é o simulador empacotado com [Capacitor](https://capacitorjs.com/) e funciona sem internet: React, Recharts, Tailwind e as fontes vão dentro do app. A cada push em `app/` ou `simulador/FlowMonitor.jsx`, o workflow `.github/workflows/android-apk.yml` compila um novo APK e substitui o arquivo da release `apk-latest`.
+O app tem dois modos, escolhidos na primeira abertura (e depois pela engrenagem no cabeçalho):
+
+- **Minha rede (ao vivo)**: lê o `flowmonitor.py` que roda no PC. Digite o IP do PC (ex.: `192.168.100.112`; a porta 8080 é automática) e use *Testar conexão*.
+- **Simulação**: o painel de demonstração, sem rede.
+
+Para o celular alcançar o PC, o coletor precisa escutar na rede e o firewall precisa liberar a porta:
+
+```powershell
+setx FLOWMONITOR_BIND 0.0.0.0
+# PowerShell como administrador:
+New-NetFirewallRule -DisplayName "FlowMonitor (rede local)" -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow -RemoteAddress LocalSubnet,100.64.0.0/10
+```
+
+Reinicie o FlowMonitor; o terminal mostra `No celular: http://IP:8080`. Fora de casa, com CGNAT, use o [Tailscale](https://tailscale.com/) no PC e no celular e digite o IP 100.x do PC no app.
+
+O APK é empacotado com [Capacitor](https://capacitorjs.com/): React, Recharts, Tailwind e as fontes vão dentro do app. A cada push em `app/`, `simulador/FlowMonitor.jsx` ou `live/src/`, o workflow `.github/workflows/android-apk.yml` compila um novo APK e substitui o arquivo da release `apk-latest`.
 
 Instalar: abra o link no Android, baixe, permita instalar apps da fonte (Chrome ou Arquivos) e, se o Play Protect avisar, toque em *Mais detalhes → Instalar mesmo assim*. O app é assinado com uma chave de debug fixa (`app/ci/debug.keystore`, senha `android`), então builds novos atualizam por cima do anterior. Não use essa chave para publicar na Play Store.
 

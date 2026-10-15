@@ -11,6 +11,7 @@ Só usa a biblioteca padrão do Python (3.8+). Nada para instalar com pip.
 Uso:
     py flowmonitor.py            inicia o dashboard
     py flowmonitor.py --check    só confere a conexão com o HA e lista o que encontrou
+    FLOWMONITOR_BIND=0.0.0.0     libera o acesso do celular (app FlowMonitor) pela rede local
     pyw flowmonitor.py --service --open
                                  início automático (sem janela): espera o HA subir,
                                  grava log em flowmonitor.log e abre o painel
@@ -36,6 +37,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+API_VERSION = 2
 HISTORY_POINTS = 180          # 6 min com amostra de 2 s
 LEFT_VISIBLE_SECONDS = 12     # quanto tempo um dispositivo que saiu continua visível
 TIMELINE_MINUTES = 60
@@ -467,9 +469,19 @@ def make_handler(collector):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Cache-Control", "no-store")
+            # O app Android lê a API de outra origem (http://localhost dentro do APK).
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def do_OPTIONS(self):
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "*")
+            self.send_header("Access-Control-Max-Age", "86400")
+            self.end_headers()
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
@@ -482,7 +494,9 @@ def make_handler(collector):
                 body = json.dumps(collector.snapshot(), ensure_ascii=False).encode("utf-8")
                 return self._send(200, body, "application/json; charset=utf-8")
             if path == "/api/health":
-                return self._send(200, b'{"ok":true}', "application/json")
+                info = {"ok": True, "app": "flowmonitor", "version": API_VERSION, "haOk": collector.ha_ok,
+                        "router": collector.router.get("model")}
+                return self._send(200, json.dumps(info).encode("utf-8"), "application/json")
             self._send(404, b"not found", "text/plain")
 
         def log_message(self, *args):
@@ -492,6 +506,27 @@ def make_handler(collector):
 
 
 # ─────────────────────────────── main ───────────────────────────────
+
+def lan_addresses():
+    """Endereços IPv4 deste PC que o celular pode usar (Wi-Fi/cabo e Tailscale)."""
+    import socket
+    found = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # não envia nada; só descobre a interface de saída
+        found.append(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127.") and ip not in found:
+                found.append(ip)
+    except OSError:
+        pass
+    return found or ["IP-DO-PC"]
+
 
 def check(ha):
     states = ha.states()
@@ -517,7 +552,8 @@ def main():
     parser = argparse.ArgumentParser(description="FlowMonitor: ponte com o Home Assistant")
     parser.add_argument("--ha", default=os.environ.get("FLOWMONITOR_HA_URL", "http://localhost:8123"), help="URL do Home Assistant")
     parser.add_argument("--port", type=int, default=8080, help="porta do dashboard (padrão 8080)")
-    parser.add_argument("--bind", default="127.0.0.1", help="interface de escuta (use 0.0.0.0 para abrir na rede)")
+    parser.add_argument("--bind", default=os.environ.get("FLOWMONITOR_BIND", "127.0.0.1"),
+                        help="interface de escuta (0.0.0.0 abre para o celular na rede; padrão 127.0.0.1 ou FLOWMONITOR_BIND)")
     parser.add_argument("--interval", type=float, default=2.0, help="segundos entre leituras do HA (padrão 2)")
     parser.add_argument("--ping", default="8.8.8.8", help="alvo do teste de latência (padrão 8.8.8.8)")
     parser.add_argument("--check", action="store_true", help="só confere a conexão e lista as entidades")
@@ -588,7 +624,13 @@ def main():
         print("Não consegui abrir a porta %d (%s). Use --port para escolher outra." % (args.port, exc))
         collector.stop.set()
         return 1
-    print("Dashboard em %s  (Ctrl+C para encerrar)\n" % url)
+    print("Dashboard em %s  (Ctrl+C para encerrar)" % url)
+    if args.bind in ("0.0.0.0", "::"):
+        for ip in lan_addresses():
+            print("No celular (app FlowMonitor ou navegador): http://%s:%d" % (ip, args.port))
+    else:
+        print("Só este PC acessa. Para o celular, defina FLOWMONITOR_BIND=0.0.0.0 ou use --bind 0.0.0.0")
+    print()
     if not args.service and not args.no_browser:
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     try:

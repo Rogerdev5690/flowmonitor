@@ -10,7 +10,7 @@ import {
 import {
   Activity, Globe, WifiOff, Pause, Play, Router, Clock, Smartphone, Laptop, Tv, HelpCircle,
   X, CircleCheck, CircleAlert, ArrowDown, ArrowUp, Network, TriangleAlert, Timer, Terminal,
-  Eye, EyeOff, Wifi, Cable, UserRound, Plug, LogOut, LogIn, Database, CloudOff,
+  Eye, EyeOff, Wifi, Cable, UserRound, Plug, LogOut, LogIn, Database, CloudOff, Settings,
 } from "lucide-react";
 
 /* ─────────────────────────────── Tema ─────────────────────────────── */
@@ -159,7 +159,7 @@ const signalBars = (rssi) => {
 
 /* ─────────────────────────── Coleta ─────────────────────────── */
 
-function useSnapshot(paused) {
+function useSnapshot(paused, apiBase) {
   const [snap, setSnap] = useState(null);
   const [offline, setOffline] = useState(null);
   const busy = useRef(false);
@@ -167,16 +167,19 @@ function useSnapshot(paused) {
     if (busy.current) return;
     busy.current = true;
     try {
-      const res = await fetch("/api/snapshot", { cache: "no-store" });
+      const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 5000) : null;
+      const res = await fetch(`${apiBase || ""}/api/snapshot`, { cache: "no-store", signal: ctrl ? ctrl.signal : undefined });
+      if (timer) clearTimeout(timer);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setSnap(await res.json());
       setOffline(null);
     } catch (e) {
-      setOffline(String(e.message || e));
+      setOffline(e && e.name === "AbortError" ? "sem resposta em 5 s" : String((e && e.message) || e));
     } finally {
       busy.current = false;
     }
-  }, []);
+  }, [apiBase]);
   useEffect(() => {
     if (paused) return undefined;
     load();
@@ -236,27 +239,26 @@ function Empty({ children }) {
 
 /* ───────────────────────────── Cabeçalho ───────────────────────────── */
 
-function Header({ paused, onToggle, health, routerLabel }) {
+function Header({ paused, onToggle, health, routerLabel, onSettings }) {
   const now = useNow();
   const state = paused ? "var(--warn)" : health === "ok" ? "var(--neon)" : health === "warn" ? "var(--warn)" : "var(--crit)";
   return (
     <header className="fm-header sticky z-40 border-b border-line bg-bg/80 backdrop-blur-md">
-      <div className="fm-gutter mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 py-3">
-        <div className="flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-lg border border-electric/40 bg-electric/10 text-electric shadow-[0_0_22px_-4px_rgb(var(--electric)/.6)]">
+      <div className="fm-gutter mx-auto flex max-w-[1600px] items-center justify-between gap-3 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid h-10 w-10 flex-none place-items-center rounded-lg border border-electric/40 bg-electric/10 text-electric shadow-[0_0_22px_-4px_rgb(var(--electric)/.6)]">
             <Activity size={22} strokeWidth={2.2} />
           </span>
-          <div className="leading-tight">
-            <div className="font-display text-[22px] font-bold tracking-tight text-ink">Flow<span className="text-electric">Monitor</span></div>
+          <div className="min-w-0 leading-tight">
+            <div className="font-display text-[20px] font-bold tracking-tight text-ink sm:text-[22px]">Flow<span className="text-electric">Monitor</span></div>
             <div className="flex items-center gap-2">
               <span className={cx("fm-live", !paused && health === "ok" && "is-on")} style={{ "--state": state }} />
-              <span className="fm-label text-[11px] text-ink-2">NOC Real-Time</span>
-              {paused && <StatePill tone="warn" icon={Pause}>Pausado</StatePill>}
+              <span className="fm-label whitespace-nowrap text-[11px] text-ink-2">Ao vivo · {paused ? "pausado" : "NOC Real-Time"}</span>
             </div>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="hidden items-center gap-2 rounded-md border border-line bg-inset/70 px-3 py-1.5 md:flex">
+        <div className="flex flex-none items-center gap-2.5">
+          <div className="hidden items-center gap-2 rounded-md border border-line bg-inset/70 px-3 py-1.5 lg:flex">
             <Router size={14} className="text-muted" />
             <span className="fm-mono text-[12px] text-ink-2">{routerLabel}</span>
             <span className="fm-mono text-[11px] text-muted">via Home Assistant</span>
@@ -266,21 +268,28 @@ function Header({ paused, onToggle, health, routerLabel }) {
             <span className="fm-mono text-[13px] tabular-nums text-ink">{fmtClock(now)}</span>
             <span className="fm-mono text-[10px] text-muted">BRT</span>
           </div>
-          <button type="button" onClick={onToggle} aria-pressed={paused}
-            className={cx("fm-btn inline-flex items-center gap-2 rounded-md border px-3.5 py-2 text-[13px] font-semibold transition",
+          <button type="button" onClick={onToggle} aria-pressed={paused} aria-label={paused ? "Retomar atualização" : "Pausar atualização"}
+            className={cx("fm-btn inline-flex h-10 min-w-10 items-center justify-center gap-2 rounded-md border px-2.5 text-[13px] font-semibold transition sm:px-3.5",
               paused ? "border-neon/50 bg-neon/10 text-neon hover:bg-neon/20" : "border-electric/50 bg-electric/10 text-electric hover:bg-electric/20")}>
-            {paused ? <Play size={15} /> : <Pause size={15} />}
-            {paused ? "Retomar atualização" : "Pausar atualização"}
+            {paused ? <Play size={16} /> : <Pause size={16} />}
+            <span className="hidden sm:inline">{paused ? "Retomar atualização" : "Pausar atualização"}</span>
           </button>
+          {onSettings && (
+            <button type="button" onClick={onSettings} aria-label="Conexão e modo do app"
+              className="fm-btn grid h-10 w-10 place-items-center rounded-md border border-line-2 bg-inset/70 text-ink-2 transition hover:border-electric/60 hover:text-electric">
+              <Settings size={17} />
+            </button>
+          )}
         </div>
       </div>
     </header>
   );
 }
 
-function Banner({ offline, snap }) {
+function Banner({ offline, snap, apiBase }) {
   let msg = null;
-  if (offline) msg = { tone: "crit", Icon: CloudOff, title: "Coletor sem resposta", body: "O flowmonitor.py parou ou foi fechado. Rode de novo no terminal; o painel volta sozinho." };
+  if (offline && apiBase) msg = { tone: "crit", Icon: CloudOff, title: `Sem resposta de ${apiBase.replace(/^https?:\/\//, "")}`, body: "Confira se o celular está no Wi-Fi de casa (ou no Tailscale) e se o FlowMonitor está aberto no PC com acesso pela rede liberado. O painel volta sozinho." };
+  else if (offline) msg = { tone: "crit", Icon: CloudOff, title: "Coletor sem resposta", body: "O flowmonitor.py parou ou foi fechado. Rode de novo no terminal; o painel volta sozinho." };
   else if (snap && snap.source.haOk === false) msg = { tone: "crit", Icon: Database, title: "Home Assistant inacessível", body: snap.source.error || "Confira se o container está rodando (docker compose up -d)." };
   else if (snap && snap.source.haOk && !snap.wan.found) msg = { tone: "warn", Icon: TriangleAlert, title: "Integração Huawei não encontrada no HA", body: "Adicione a integração Huawei Mesh Router em Configurações → Dispositivos e serviços." };
   if (!msg) return null;
@@ -534,10 +543,10 @@ function RouterCard({ snap, bands }) {
         </div>
       </div>
 
-      <div className="fm-mono grid gap-1 rounded-md border border-line bg-inset/50 px-3 py-2 text-[11px] text-muted">
-        <div className="flex justify-between gap-3"><span>fonte</span><span className="truncate text-ink-2">{snap.source.haUrl}</span></div>
-        <div className="flex justify-between gap-3"><span>wan</span><span className="truncate text-ink-2">{ent.wan || "—"}</span></div>
-        <div className="flex justify-between gap-3"><span>rastreadores</span><span className="text-ink-2">{ent.trackers ?? 0} entidades</span></div>
+      <div className="fm-mono grid min-w-0 gap-1 rounded-md border border-line bg-inset/50 px-3 py-2 text-[11px] text-muted">
+        <div className="flex min-w-0 justify-between gap-3"><span className="flex-none">fonte</span><span className="min-w-0 truncate text-ink-2">{snap.source.haUrl}</span></div>
+        <div className="flex min-w-0 justify-between gap-3"><span className="flex-none">wan</span><span className="min-w-0 truncate text-ink-2">{ent.wan || "—"}</span></div>
+        <div className="flex min-w-0 justify-between gap-3"><span className="flex-none">rastreadores</span><span className="text-ink-2">{ent.trackers ?? 0} entidades</span></div>
       </div>
     </section>
   );
@@ -645,6 +654,30 @@ function DeviceRow({ d, now, isNew }) {
   );
 }
 
+/** Versão em cartão da linha da tabela, usada no celular. */
+function DeviceCard({ d, now, isNew }) {
+  const t = TYPES[d.type] || TYPES.other;
+  const left = d.state === "left";
+  return (
+    <li className={cx("rounded-lg border border-line bg-inset/50 p-3", isNew && "fm-row-in", left && "fm-row-left")}>
+      <div className="flex items-center gap-3">
+        <span className="grid h-9 w-9 flex-none place-items-center rounded-md border border-line-2 bg-inset" style={{ color: t.color }}><t.Icon size={16} /></span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[14px] font-medium text-ink">{d.name}</div>
+          <div className="fm-mono truncate text-[11px] text-muted">{d.ip || "—"} · {t.label}</div>
+        </div>
+        {left ? <StatePill tone="crit" icon={LogOut}>Saiu</StatePill> : <StatePill tone="neon" icon={CircleCheck}>Online</StatePill>}
+      </div>
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <span className="flex items-center gap-2"><BandChip band={d.band} guest={d.guest} /><Signal rssi={d.rssi} /></span>
+        <span className="fm-mono text-[11px] tabular-nums text-ink">↓ {fmtKB(d.downKBps)}</span>
+        <span className="fm-mono text-[11px] tabular-nums text-muted">↑ {fmtKB(d.upKBps)}</span>
+        <span className="fm-mono ml-auto text-[11px] tabular-nums text-ink-2">{left ? "—" : fmtAgo(isNum(d.since) ? now - d.since : null)}</span>
+      </div>
+    </li>
+  );
+}
+
 const SORTS = [
   { key: "recent", label: "Mais recentes" },
   { key: "traffic", label: "Mais tráfego" },
@@ -733,7 +766,14 @@ function DevicesCard({ snap, newMacs }) {
         </div>
       </div>
 
-      <div className="fm-scroll max-h-[460px] min-w-0 overflow-auto rounded-lg border border-line">
+      <ul className="flex flex-col gap-2 md:hidden" aria-label="Dispositivos conectados ao roteador">
+        {rows.length === 0 && (
+          <li className="rounded-lg border border-dashed border-line-2 px-4 py-8 text-center text-[13px] text-muted">Nenhum dispositivo online reportado pelo Home Assistant.</li>
+        )}
+        {rows.map((d) => <DeviceCard key={d.mac + d.state} d={d} now={snap.now} isNew={newMacs.has(d.mac)} />)}
+      </ul>
+
+      <div className="fm-scroll hidden max-h-[460px] min-w-0 overflow-auto rounded-lg border border-line md:block">
         <table className="w-full min-w-[700px] border-collapse text-left">
           <caption className="sr-only">Dispositivos conectados ao roteador</caption>
           <thead className="sticky top-0 z-10 bg-inset">
@@ -814,9 +854,9 @@ function eventToToast(e) {
 
 let toastSeq = 0;
 
-export default function FlowMonitorLive() {
+export default function FlowMonitorLive({ apiBase = "", onSettings }) {
   const [paused, setPaused] = useState(false);
-  const { snap, offline } = useSnapshot(paused);
+  const { snap, offline } = useSnapshot(paused, apiBase);
   const [toasts, setToasts] = useState([]);
   const [newMacs, setNewMacs] = useState(() => new Set());
   const lastEvent = useRef(null);
@@ -854,9 +894,9 @@ export default function FlowMonitorLive() {
   return (
     <div className="fm-app text-ink">
       <style>{GLOBAL_CSS}</style>
-      <Header paused={paused} onToggle={() => setPaused((p) => !p)} health={health} routerLabel={routerLabel} />
+      <Header paused={paused} onToggle={() => setPaused((p) => !p)} health={health} routerLabel={routerLabel} onSettings={onSettings} />
       <main className="fm-gutter mx-auto max-w-[1600px]" style={{ paddingBlock: 20 }}>
-        <Banner offline={offline} snap={snap} />
+        <Banner offline={offline} snap={snap} apiBase={apiBase} />
         {!snap ? (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
             {["lg:col-span-4", "lg:col-span-8", "lg:col-span-5", "lg:col-span-7"].map((c) => (

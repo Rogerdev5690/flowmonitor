@@ -20,7 +20,7 @@ import {
   Clock, Smartphone, Laptop, Server, HardDrive, Tv, Speaker, Cctv, Cast, Printer,
   Lightbulb, RefreshCw, X, CircleCheck, Hourglass, CircleAlert, ArrowDown, ArrowUp,
   Unplug, Zap, Terminal, Network, TriangleAlert, Timer, SquareTerminal, Route, Square,
-  Eraser, Wifi, CloudOff,
+  Eraser, Wifi, CloudOff, Settings,
 } from "lucide-react";
 
 /* ─────────────────────────────── Tema ─────────────────────────────── */
@@ -625,7 +625,7 @@ function ConnectionStrip({ online, running, wanDown, lastSync }) {
   );
 }
 
-function Header({ running, onToggle, wanDown, onRefresh, refreshing, refreshCount, online, lastSync }) {
+function Header({ running, onToggle, wanDown, onRefresh, refreshing, refreshCount, online, lastSync, onSettings }) {
   return (
     <header className="fm-header sticky z-40 border-b border-line bg-bg/80 backdrop-blur-md">
       <div className="fm-gutter mx-auto flex max-w-[1600px] items-center justify-between gap-3 py-3">
@@ -670,6 +670,12 @@ function Header({ running, onToggle, wanDown, onRefresh, refreshing, refreshCoun
             {running ? <Pause size={16} /> : <Play size={16} />}
             <span className="hidden sm:inline">{running ? "Pausar Simulação" : "Retomar Simulação"}</span>
           </button>
+          {onSettings && (
+            <button type="button" onClick={onSettings} aria-label="Conexão e modo do app"
+              className="fm-btn grid h-10 w-10 place-items-center rounded-md border border-line-2 bg-inset/70 text-ink-2 transition hover:border-electric/60 hover:text-electric">
+              <Settings size={17} />
+            </button>
+          )}
         </div>
       </div>
       <ConnectionStrip online={online} running={running} wanDown={wanDown} lastSync={lastSync} />
@@ -1822,7 +1828,7 @@ function Toast({ t, onDismiss }) {
 
 let toastSeq = 0;
 
-export default function FlowMonitor() {
+export default function FlowMonitor({ onSettings } = {}) {
   const simRef = useRef(null);
   if (!simRef.current) simRef.current = new NetworkSimulator();
   const sim = simRef.current;
@@ -1900,7 +1906,8 @@ export default function FlowMonitor() {
     <div className="fm-app text-ink">
       <style>{GLOBAL_CSS}</style>
       <Header running={running} onToggle={() => setRunning((r) => !r)} wanDown={snap.wanDown}
-        onRefresh={refresh} refreshing={refreshing} refreshCount={syncKey} online={online} lastSync={snap.now} />
+        onRefresh={refresh} refreshing={refreshing} refreshCount={syncKey} online={online} lastSync={snap.now}
+        onSettings={onSettings} />
 
       <main className="fm-main fm-gutter mx-auto max-w-[1600px]" style={{ paddingBlock: 20 }}>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">

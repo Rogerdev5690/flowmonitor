@@ -6,6 +6,7 @@ on:
     paths:
       - "app/**"
       - "simulador/FlowMonitor.jsx"
+      - "live/src/**"
       - ".github/workflows/android-apk.yml"
   workflow_dispatch:
 
@@ -52,7 +53,7 @@ jobs:
           --iconBackgroundColor '#0c1424' --iconBackgroundColorDark '#0c1424'
           --splashBackgroundColor '#060b16' --splashBackgroundColorDark '#060b16'
 
-      - name: Barra de status escura e número da versão
+      - name: Barra de status, HTTP na rede local e número da versão
         env:
           RUN: ${{ github.run_number }}
         run: |
@@ -67,6 +68,11 @@ jobs:
           s = s.replace('<item name="android:background">@null</item>',
                         '<item name="android:background">@null</item>' + extra, 1)
           open(p, "w").write(s)
+          m = "android/app/src/main/AndroidManifest.xml"
+          x = open(m).read()
+          if "usesCleartextTraffic" not in x:
+              x = x.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
+          open(m, "w").write(x)
           g = "android/app/build.gradle"
           b = open(g).read()
           b = re.sub(r"versionCode \d+", f"versionCode {run}", b)
@@ -102,7 +108,8 @@ jobs:
           2. Abra o arquivo baixado. Se o Android pedir, permita instalar apps desta fonte (Chrome ou Arquivos).
           3. Se o Play Protect avisar que o app não foi verificado, toque em Mais detalhes → Instalar mesmo assim.
 
-          Versão simulada do painel, funciona sem internet. Builds novos atualizam por cima do anterior."
+          Na primeira abertura, escolha Minha rede (ao vivo) e digite o IP do PC onde roda o flowmonitor.py, ou escolha Simulação.
+          Builds novos atualizam por cima do anterior."
 
       - uses: actions/upload-artifact@v4
         with:

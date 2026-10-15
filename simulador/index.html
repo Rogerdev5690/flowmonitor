@@ -643,7 +643,7 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
     const s = !online ? { state: "var(--crit)", label: "Offline", text: "sem conex\xE3o com o servidor", tone: "text-crit" } : !running ? { state: "var(--warn)", label: "Pausado", text: "atualiza\xE7\xE3o autom\xE1tica suspensa", tone: "text-warn" } : { state: "var(--neon)", label: "Online", text: "Conectado ao servidor", tone: "text-neon" };
     return /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-gutter flex items-center justify-between gap-3 border-t border-line/70 py-1.5 md:hidden", role: "status", "aria-live": "polite" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "flex min-w-0 items-center gap-2 text-[11px]" }, /* @__PURE__ */ import_react.default.createElement("span", { className: cx("fm-live flex-none", online && running && "is-on"), style: { "--state": s.state } }), /* @__PURE__ */ import_react.default.createElement("span", { className: cx("font-semibold", s.tone) }, s.label), /* @__PURE__ */ import_react.default.createElement("span", { className: "truncate text-ink-2" }, "\xB7 ", s.text), wanDown && /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono flex-none rounded border border-crit/40 px-1 text-[9px] text-crit" }, "WAN DOWN")), /* @__PURE__ */ import_react.default.createElement("span", { className: "fm-mono flex-none text-[10px] tabular-nums text-muted" }, "sync ", fmtClock(lastSync)));
   }
-  function Header({ running, onToggle, wanDown, onRefresh, refreshing, refreshCount, online, lastSync }) {
+  function Header({ running, onToggle, wanDown, onRefresh, refreshing, refreshCount, online, lastSync, onSettings }) {
     return /* @__PURE__ */ import_react.default.createElement("header", { className: "fm-header sticky z-40 border-b border-line bg-bg/80 backdrop-blur-md" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-gutter mx-auto flex max-w-[1600px] items-center justify-between gap-3 py-3" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "flex min-w-0 items-center gap-3" }, /* @__PURE__ */ import_react.default.createElement("span", { className: "grid h-10 w-10 flex-none place-items-center rounded-lg border border-electric/40 bg-electric/10 text-electric shadow-[0_0_22px_-4px_rgb(var(--electric)/.6)]" }, /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Activity, { size: 22, strokeWidth: 2.2 })), /* @__PURE__ */ import_react.default.createElement("div", { className: "min-w-0 leading-tight" }, /* @__PURE__ */ import_react.default.createElement("div", { className: "font-display text-[20px] font-bold tracking-tight text-ink sm:text-[22px]" }, "Flow", /* @__PURE__ */ import_react.default.createElement("span", { className: "text-electric" }, "Monitor")), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ import_react.default.createElement(
       "span",
       {
@@ -676,6 +676,15 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
       },
       running ? /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Pause, { size: 16 }) : /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Play, { size: 16 }),
       /* @__PURE__ */ import_react.default.createElement("span", { className: "hidden sm:inline" }, running ? "Pausar Simula\xE7\xE3o" : "Retomar Simula\xE7\xE3o")
+    ), onSettings && /* @__PURE__ */ import_react.default.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: onSettings,
+        "aria-label": "Conex\xE3o e modo do app",
+        className: "fm-btn grid h-10 w-10 place-items-center rounded-md border border-line-2 bg-inset/70 text-ink-2 transition hover:border-electric/60 hover:text-electric"
+      },
+      /* @__PURE__ */ import_react.default.createElement(import_lucide_react.Settings, { size: 17 })
     ))), /* @__PURE__ */ import_react.default.createElement(ConnectionStrip, { online, running, wanDown, lastSync }));
   }
   function SyncRing({ k }) {
@@ -1537,7 +1546,7 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
     )), /* @__PURE__ */ import_react.default.createElement("div", { className: cx("fm-toast-timer h-0.5 opacity-70", tone.bar), style: { animationDuration: `${TOAST_MS}ms` } }));
   }
   var toastSeq = 0;
-  function FlowMonitor() {
+  function FlowMonitor({ onSettings } = {}) {
     const simRef = (0, import_react.useRef)(null);
     if (!simRef.current) simRef.current = new NetworkSimulator();
     const sim = simRef.current;
@@ -1615,7 +1624,8 @@ body{background:rgb(var(--bg));color:rgb(var(--ink));font-family:"IBM Plex Sans"
         refreshing,
         refreshCount: syncKey,
         online,
-        lastSync: snap.now
+        lastSync: snap.now,
+        onSettings
       }
     ), /* @__PURE__ */ import_react.default.createElement("main", { className: "fm-main fm-gutter mx-auto max-w-[1600px]", style: { paddingBlock: 20 } }, /* @__PURE__ */ import_react.default.createElement("div", { className: "grid grid-cols-1 gap-4 lg:grid-cols-12" }, /* @__PURE__ */ import_react.default.createElement(StatusCard, { snap, running, onToggleFailure: toggleFailure, activeCount, sync: syncKey }), /* @__PURE__ */ import_react.default.createElement(TrafficCard, { snap, sync: syncKey }), /* @__PURE__ */ import_react.default.createElement("div", { className: "flex min-w-0 flex-col gap-4 lg:col-span-5" }, /* @__PURE__ */ import_react.default.createElement(EquipmentCard, { snap, sync: syncKey }), /* @__PURE__ */ import_react.default.createElement(LogCard, { log: snap.log })), /* @__PURE__ */ import_react.default.createElement("div", { className: "min-w-0 lg:col-span-7" }, /* @__PURE__ */ import_react.default.createElement(DevicesCard, { snap, onRenew: renew, sync: syncKey })), /* @__PURE__ */ import_react.default.createElement(DiagnosticsTerminal, { sim, devices: snap.devices })), /* @__PURE__ */ import_react.default.createElement("footer", { className: "fm-mono mt-6 flex flex-wrap justify-between gap-2 text-[11px] text-muted" }, /* @__PURE__ */ import_react.default.createElement("span", null, "FlowMonitor \xB7 dados simulados no navegador, nenhum equipamento real \xE9 consultado."), /* @__PURE__ */ import_react.default.createElement("span", null, "tick #", snap.tick, " \xB7 atualiza\xE7\xE3o 1 s"))), /* @__PURE__ */ import_react.default.createElement(BottomNav, null), /* @__PURE__ */ import_react.default.createElement("div", { className: "fm-toasts", "aria-live": "polite" }, toasts.map((t) => /* @__PURE__ */ import_react.default.createElement(Toast, { key: t.id, t, onDismiss: dismissToast }))));
   }
